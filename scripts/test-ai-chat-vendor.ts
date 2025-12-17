@@ -43,6 +43,28 @@ type TurnReport = {
 	fallbackPreview?: string;
 };
 
+// Tool runner: quais tools têm side effects (escrevem no banco / mudam estado)?
+// Usado para decidir se é seguro re-tentar quando o provider dá erro transitório.
+const SIDE_EFFECT_TOOLS = new Set<string>([
+	'addDealNote',
+	'completeActivity',
+	'createContact',
+	'createDeal',
+	'createTask',
+	'linkDealToContact',
+	'logActivity',
+	'markDealAsLost',
+	'markDealAsWon',
+	'moveDeal',
+	'moveDealsBulk',
+	'reorderStages',
+	'rescheduleActivity',
+	'updateContact',
+	'updateDeal',
+	'updateStage',
+	'assignDeal',
+]);
+
 function toBool(v: unknown): boolean {
 	return String(v || '').toLowerCase() === 'true';
 }
@@ -101,6 +123,7 @@ async function runTurn(params: {
 }) {
 	const maxRetries = Number(process.env.AI_CHAT_RETRIES ?? '2');
 	let last: { raw: string; textPreview: string; calls: string[]; retryNote?: string } | null = null;
+	let sideEffectEver = false;
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		const agent = await createCRMAgent(
@@ -112,6 +135,7 @@ async function runTurn(params: {
 		);
 
 		const g = globalThis as any;
+		const callsBaselineAttempt = Array.isArray(g.__AI_TOOL_CALLS__) ? g.__AI_TOOL_CALLS__.length : 0;
 		let textPreview = '';
 		let raw = '';
 		let error: unknown = null;
@@ -128,7 +152,11 @@ async function runTurn(params: {
 			textPreview = raw;
 		}
 
+		const callsAttempt: string[] = Array.isArray(g.__AI_TOOL_CALLS__)
+			? g.__AI_TOOL_CALLS__.slice(callsBaselineAttempt)
+			: [];
 		const calls: string[] = Array.isArray(g.__AI_TOOL_CALLS__) ? g.__AI_TOOL_CALLS__.slice(params.toolCallsBefore) : [];
+		if (callsAttempt.some((c) => SIDE_EFFECT_TOOLS.has(c))) sideEffectEver = true;
 		const rawLower = raw.toLowerCase();
 		const retryable =
 			!!error &&
@@ -147,7 +175,8 @@ async function runTurn(params: {
 				rawLower.includes('504'));
 
 		// Evita re-tentar quando já houve side effects via tools.
-		if (retryable && calls.length === 0 && attempt < maxRetries) {
+		// Mas permite retry quando houve somente tools "read-only" (ex.: search/list/get) e o provider caiu.
+		if (retryable && !sideEffectEver && attempt < maxRetries) {
 			const waitMs = Math.min(10_000, 750 * 2 ** attempt);
 			console.warn(`\n⚠️ Provider instável (tentativa ${attempt + 1}/${maxRetries + 1}). Re-tentando em ${waitMs}ms...`);
 			await new Promise((r) => setTimeout(r, waitMs));
@@ -234,6 +263,8 @@ async function main() {
 			boardId: board.boardId,
 			boardName: `AI Tools Test Board ${seller.firstName}`,
 			dealId: bundle.openDealId,
+			// Ajuda o agente a entender "contato principal" sem precisar pedir ID.
+			contactId: bundle.contactId,
 			wonStage: 'Ganho',
 			lostStage: 'Perdido',
 			stages: [
@@ -260,6 +291,8 @@ async function main() {
 
 		const humanPrompts = toBool(process.env.SALES_CHAT_HUMAN_PROMPTS);
 		const humanTag = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); // "2025-12-17T15-44-15"
+		const mariaEmail = `maria.${humanTag}@example.com`;
+		const mariaName = `Maria Yahoo ${humanTag}`;
 
 		let script: ScriptStep[] = [
 			{
@@ -333,7 +366,7 @@ async function main() {
 				user:
 					`Atualize o deal (dealId: ${bundle.openDealId}) definindo o title para "AI Tools Deal Open - Renovação ${fx.runId}". ` +
 					'Use updateDeal e não peça confirmação.',
-				userHuman: `Atualize o título do deal atual para "Renovação (Yahoo) ${humanTag}".`,
+				userHuman: `Atualize o título do deal atual para "Renovação (Yahoo) ${humanTag}". Faça direto, sem buscar outras informações e sem perguntas.`,
 				expectTool: 'updateDeal',
 				fallbackUser:
 					`Execute updateDeal com dealId: ${bundle.openDealId} e title: "AI Tools Deal Open - Renovação ${fx.runId}". ` +
@@ -353,55 +386,63 @@ async function main() {
 				fallbackUser: `Execute listActivities com dealId: ${bundle.openDealId}.`,
 			},
 			{
-				label: 'Reagendar atividade',
-				user: `Reagende a atividade (activityId: ${bundle.futureActivityId}) para newDate ${twoDaysFromNowIso}. Use rescheduleActivity.`,
-				userHuman: `Reagende a próxima atividade desse deal para daqui a 2 dias.`,
-				expectTool: 'rescheduleActivity',
-				fallbackUser: `Execute rescheduleActivity com activityId: ${bundle.futureActivityId} e newDate: "${twoDaysFromNowIso}".`,
-			},
-			{
 				label: 'Completar atividade',
 				user: `Marque como concluída a atividade (activityId: ${bundle.overdueActivityId}). Use completeActivity.`,
-				userHuman: 'Marque como concluída a atividade atrasada desse deal.',
+				userHuman:
+					'Marque como concluída a atividade atrasada (vencida) desse deal — a que estava marcada para 15/12. Se precisar, liste as atividades e conclua a vencida — sem me perguntar nada.',
 				expectTool: 'completeActivity',
 				fallbackUser: `Execute completeActivity com activityId: ${bundle.overdueActivityId}.`,
 			},
 			{
+				label: 'Reagendar atividade',
+				user: `Reagende a atividade (activityId: ${bundle.futureActivityId}) para newDate ${twoDaysFromNowIso}. Use rescheduleActivity.`,
+				userHuman:
+					'Reagende uma atividade NÃO vencida desse deal (por exemplo, a "Ligar amanhã - follow-up" ou a futura) para daqui a 2 dias. Não reagende a vencida de 15/12.',
+				expectTool: 'rescheduleActivity',
+				fallbackUser: `Execute rescheduleActivity com activityId: ${bundle.futureActivityId} e newDate: "${twoDaysFromNowIso}".`,
+			},
+			{
 				label: 'Logar atividade',
-				user: 'Registre uma ligação realizada agora para esse deal.',
+				user: 'Registre (no CRM) uma ligação realizada agora para esse deal.',
+				userHuman: 'Registra agora no CRM uma ligação realizada (tipo CALL) no deal atual. Sem perguntas.',
 				expectTool: 'logActivity',
 				fallbackUser: `Execute logActivity com dealId: ${bundle.openDealId} e type: "CALL" e title: "Ligação realizada".`,
 			},
 			{
 				label: 'Adicionar nota',
-				user: 'Adicione uma nota nesse deal: "Cliente pediu proposta atualizada".',
+				user: 'Registre (salve) uma nota interna nesse deal: "Cliente pediu proposta atualizada".',
+				userHuman: 'Registra uma nota interna no deal atual: "Cliente pediu proposta atualizada". Salve no CRM.',
 				expectTool: 'addDealNote',
 				fallbackUser: `Execute addDealNote com dealId: ${bundle.openDealId} e note: "Cliente pediu proposta atualizada".`,
 			},
 			{
 				label: 'Listar notas',
-				user: 'Liste as notas desse deal.',
+				user: 'Liste as notas desse deal no CRM (sem inventar nada).',
+				userHuman: 'Mostre as notas desse deal agora, puxando do CRM (sem inventar).',
 				expectTool: 'listDealNotes',
 				fallbackUser: `Execute listDealNotes com dealId: ${bundle.openDealId} e limit: 10.`,
 			},
 			{
 				label: 'Criar contato',
-				user: `Crie um contato Maria Yahoo ${fx.runId} com email maria.${fx.runId}@example.com e telefone 11999990000.`,
-				userHuman: `Crie um novo contato da Maria Yahoo (email maria.${humanTag}@example.com, tel 11999990000).`,
+				user:
+					`Crie um contato ${humanPrompts ? mariaName : `Maria Yahoo ${fx.runId}`} ` +
+					`com email ${humanPrompts ? mariaEmail : `maria.${fx.runId}@example.com`} e telefone 11999990000. ` +
+					'Cadastre agora no CRM, sem perguntas.',
+				userHuman: `Crie (cadastre) agora um novo contato: ${mariaName} (email ${mariaEmail}, tel 11999990000). Sem perguntas.`,
 				expectTool: 'createContact',
-				fallbackUser: `Execute createContact com name: "Maria Yahoo ${fx.runId}", email: "maria.${fx.runId}@example.com" e phone: "11999990000".`,
+				fallbackUser: `Execute createContact com name: "${humanPrompts ? mariaName : `Maria Yahoo ${fx.runId}`}", email: "${humanPrompts ? mariaEmail : `maria.${fx.runId}@example.com`}" e phone: "11999990000".`,
 			},
 			{
 				label: 'Buscar contato Maria',
-				user: `Procure contatos com "maria.${fx.runId}@example.com".`,
-				userHuman: `Procure o contato da Maria pelo email maria.${humanTag}@example.com.`,
+				user: `Procure contatos com "${humanPrompts ? mariaEmail : `maria.${fx.runId}@example.com`}" no CRM.`,
+				userHuman: `Confere no CRM (fazendo a busca) se existe contato com o email ${mariaEmail} e me diga o resultado.`,
 				expectTool: 'searchContacts',
-				fallbackUser: `Execute searchContacts com query: "maria.${fx.runId}@example.com" e limit: 5.`,
+				fallbackUser: `Execute searchContacts com query: "${humanPrompts ? mariaEmail : `maria.${fx.runId}@example.com`}" e limit: 5.`,
 			},
 			{
 				label: 'Detalhar contato',
 				user: `Mostre detalhes do contato (contactId: ${bundle.contactId}).`,
-				userHuman: 'Mostre os detalhes do contato principal (o lead que estamos usando).',
+				userHuman: 'Puxe (no CRM) os detalhes do contato principal do deal atual e me mostre (sem pedir ID e sem inventar).',
 				expectTool: 'getContactDetails',
 				fallbackUser: `Execute getContactDetails com contactId: ${bundle.contactId}.`,
 			},
@@ -410,7 +451,9 @@ async function main() {
 				user:
 					`Use updateContact agora com contactId: ${bundle.contactId} e notes: "Lead quente (${fx.runId})". ` +
 					`Não altere email/telefone/nome e não peça confirmação em texto.`,
-				userHuman: `Atualize as notas do contato principal para "Lead quente (${humanTag})" sem alterar os outros campos.`,
+				userHuman:
+					`Atualize as notas do contato principal para "Lead quente (${humanTag})" sem alterar os outros campos. ` +
+					`Se precisar, puxe os detalhes e aplique a nota — sem perguntas.`,
 				expectTool: 'updateContact',
 				fallbackUser:
 					`Se precisar, use getContactDetails (contactId: ${bundle.contactId}) e em seguida execute updateContact ` +
@@ -421,6 +464,7 @@ async function main() {
 				user:
 					`Vincule o deal (dealId: ${bundle.openDealId}) ao contato (contactId: ${bundle.contactId}). ` +
 					'Use linkDealToContact e não pergunte nada.',
+				userHuman: 'Vincule agora o deal atual ao contato principal do próprio deal (no CRM). Sem perguntas.',
 				expectTool: 'linkDealToContact',
 				fallbackUser:
 					`Execute linkDealToContact com dealId: ${bundle.openDealId} e contactId: ${bundle.contactId}. ` +
@@ -429,13 +473,14 @@ async function main() {
 			{
 				label: 'Bulk move',
 				user: `Mova em lote (bulk) os deals [${bundle.openDealId}, ${bundle.lostDealId}] para o estágio Proposta (stageId: ${board.stageIds.proposta}). Use moveDealsBulk.`,
-				userHuman: 'Mova em lote dois deals (o aberto e o que vai virar perdido) para Proposta.',
+				userHuman: 'Mova em lote o deal atual e o deal LostCandidate para Proposta.',
 				expectTool: 'moveDealsBulk',
 				fallbackUser: `Execute moveDealsBulk com dealIds: ["${bundle.openDealId}", "${bundle.lostDealId}"] e stageId: "${board.stageIds.proposta}".`,
 			},
 			{
 				label: 'Listar estágios',
 				user: 'Liste os estágios desse board.',
+				userHuman: 'Quais são as colunas/estágios desse board? Liste pra mim agora.',
 				expectTool: 'listStages',
 				fallbackUser: `Execute listStages com boardId: ${board.boardId}.`,
 			},
