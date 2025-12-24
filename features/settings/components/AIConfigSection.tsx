@@ -220,7 +220,19 @@ export const AIConfigSection: React.FC = () => {
     // Observação: alguns provedores têm preço em faixas (ex.: Gemini por tamanho de contexto) e/ou “cached input” (OpenAI).
     const currentProvider = AI_PROVIDERS.find(p => p.id === aiProvider);
     const isCatalogModel = !!currentProvider?.models.some(m => m.id === aiModel);
-    const modelSelectValue = isCatalogModel ? aiModel : 'custom';
+
+    /**
+     * UX: the <select> needs its own UI state.
+     * If we keep it controlled solely by `aiModel`, choosing "custom" would "do nothing"
+     * because we intentionally do NOT persist `aiModel=''` (backend requires min(1)).
+     */
+    const [modelSelectValue, setModelSelectValue] = useState<string>(isCatalogModel ? aiModel : 'custom');
+
+    useEffect(() => {
+        // Keep select in sync when aiModel changes externally (initial load / provider auto-pick / save custom).
+        setModelSelectValue(isCatalogModel ? aiModel : 'custom');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [aiProvider, aiModel]);
 
     // UX: for "Outro (Digitar ID)" we keep a local draft and only persist on explicit save.
     // This avoids POST /api/settings/ai failing (aiModel has z.string().min(1)).
@@ -236,9 +248,9 @@ export const AIConfigSection: React.FC = () => {
             return;
         }
         if (!customModelDirty) {
-            setCustomModelDraft(aiModel);
+            setCustomModelDraft(!isCatalogModel ? aiModel : '');
         }
-    }, [modelSelectValue, aiModel, customModelDirty]);
+    }, [modelSelectValue, aiModel, customModelDirty, isCatalogModel]);
 
     const handleProviderChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newProviderId = e.target.value as 'google' | 'openai' | 'anthropic';
@@ -307,10 +319,12 @@ export const AIConfigSection: React.FC = () => {
                                     const next = e.target.value;
                                     if (next === 'custom') {
                                         // Do NOT persist empty model. Show input and let user save explicitly.
+                                        setModelSelectValue('custom');
                                         setCustomModelDraft(!isCatalogModel ? aiModel : '');
                                         setCustomModelDirty(false);
                                         return;
                                     }
+                                    setModelSelectValue(next);
                                     try {
                                         await setAiModel(next);
                                         setCustomModelDraft('');
@@ -361,6 +375,10 @@ export const AIConfigSection: React.FC = () => {
                                             setIsSavingModel(true);
                                             try {
                                                 await setAiModel(trimmed);
+                                                // Keep UX consistent: if the saved ID matches a catalog option, select it;
+                                                // otherwise stay in custom mode.
+                                                const matchesCatalog = !!currentProvider?.models.some(m => m.id === trimmed);
+                                                setModelSelectValue(matchesCatalog ? trimmed : 'custom');
                                                 setCustomModelDirty(false);
                                                 showToast('Modelo salvo!', 'success');
                                             } catch (err) {
