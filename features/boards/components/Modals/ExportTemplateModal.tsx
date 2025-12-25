@@ -165,8 +165,8 @@ export function ExportTemplateModal(props: {
   const { isOpen, onClose, boards, activeBoard, onCreateBoardAsync } = props;
   const { addToast } = useToast();
 
-  const [panel, setPanel] = useState<Panel>('export');
-  const [mode, setMode] = useState<Mode>('board');
+  const [panel, setPanel] = useState<Panel>('publish');
+  const [mode, setMode] = useState<Mode>('journey');
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Journey metadata
@@ -177,6 +177,14 @@ export function ExportTemplateModal(props: {
 
   // Selected boards for journey (keep order)
   const [selectedBoardIds, setSelectedBoardIds] = useState<string[]>(() => [activeBoard.id]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // Jobs-style: open in "Publicar" by default to reduce noise.
+    setPanel('publish');
+    setMode('journey');
+    setAdvancedOpen(false);
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -502,10 +510,11 @@ export function ExportTemplateModal(props: {
       onClose={onClose}
       title="Exportar template (comunidade)"
       size="xl"
-      bodyClassName="space-y-6"
+      className="max-w-5xl"
+      bodyClassName="space-y-6 max-h-[75vh] overflow-y-auto pr-1"
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setPanel('export')}
@@ -537,31 +546,6 @@ export function ExportTemplateModal(props: {
             Publicar
           </button>
         </div>
-
-        {panel === 'export' && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setMode('board')}
-              className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${mode === 'board'
-                ? 'bg-primary-600 text-white border-primary-600'
-                : 'bg-white dark:bg-white/5 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10'
-                }`}
-            >
-              Exportar Board
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('journey')}
-              className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${mode === 'journey'
-                ? 'bg-primary-600 text-white border-primary-600'
-                : 'bg-white dark:bg-white/5 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10'
-                }`}
-            >
-              Exportar Jornada
-            </button>
-          </div>
-        )}
       </div>
 
       {panel === 'publish' && (
@@ -849,6 +833,34 @@ export function ExportTemplateModal(props: {
                 }`}
             >
               <Download size={16} /> {isImporting ? 'Instalando…' : 'Instalar jornada'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {panel === 'export' && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-slate-900 dark:text-white">Export</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('board')}
+              className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${mode === 'board'
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white dark:bg-white/5 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10'
+                }`}
+            >
+              Board
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('journey')}
+              className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${mode === 'journey'
+                ? 'bg-primary-600 text-white border-primary-600'
+                : 'bg-white dark:bg-white/5 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/10'
+                }`}
+            >
+              Jornada
             </button>
           </div>
         </div>
