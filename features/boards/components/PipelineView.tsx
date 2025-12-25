@@ -243,6 +243,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
         onSave={editingBoard ? handleUpdateBoard : handleCreateBoard}
         editingBoard={editingBoard || undefined}
         availableBoards={boards}
+        onSwitchEditingBoard={handleEditBoard}
       />
 
       <BoardCreationWizard

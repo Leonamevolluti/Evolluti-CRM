@@ -15,7 +15,8 @@ export const MODAL_PANEL_BASE_CLASS =
 
 // Hard caps to avoid overflow. `dvh` is more stable on mobile browser chrome than `vh`.
 export const MODAL_VIEWPORT_CAP_CLASS =
-  'max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)]';
+  // UX: default modals should not feel "full screen". Keep room around them.
+  'max-h-[calc(90dvh-1rem)] sm:max-h-[calc(90dvh-2rem)]';
 
 export const MODAL_HEADER_CLASS =
   'p-3 sm:p-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between shrink-0';
