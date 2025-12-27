@@ -16,6 +16,16 @@ type ProjectInfo = {
   url?: string;
 };
 
+type SupabaseProjectOption = {
+  ref: string;
+  name: string;
+  region?: string;
+  status?: string;
+  supabaseUrl: string;
+};
+
+type SupabaseOrgOption = { slug: string; name: string; id?: string };
+
 type Step = {
   id: string;
   status: 'ok' | 'error' | 'warning' | 'running';
@@ -97,6 +107,27 @@ export default function InstallWizardPage() {
   const [supabaseResolveError, setSupabaseResolveError] = useState<string | null>(null);
   const [supabaseResolvedOk, setSupabaseResolvedOk] = useState(false);
   const [supabaseResolvedLabel, setSupabaseResolvedLabel] = useState<string | null>(null);
+  const [supabaseMode, setSupabaseMode] = useState<'existing' | 'create'>('existing');
+  const [supabaseProjectsLoading, setSupabaseProjectsLoading] = useState(false);
+  const [supabaseProjectsError, setSupabaseProjectsError] = useState<string | null>(null);
+  const [supabaseProjects, setSupabaseProjects] = useState<SupabaseProjectOption[]>([]);
+  const [supabaseSelectedProjectRef, setSupabaseSelectedProjectRef] = useState('');
+
+  const [supabaseOrgsLoading, setSupabaseOrgsLoading] = useState(false);
+  const [supabaseOrgsError, setSupabaseOrgsError] = useState<string | null>(null);
+  const [supabaseOrgs, setSupabaseOrgs] = useState<SupabaseOrgOption[]>([]);
+  const [supabaseCreateOrgSlug, setSupabaseCreateOrgSlug] = useState('');
+  const [supabaseCreateName, setSupabaseCreateName] = useState('');
+  const [supabaseCreateDbPass, setSupabaseCreateDbPass] = useState('');
+  const [supabaseCreateRegion, setSupabaseCreateRegion] = useState<'americas' | 'emea' | 'apac'>('americas');
+  const [supabaseCreating, setSupabaseCreating] = useState(false);
+  const [supabaseCreateError, setSupabaseCreateError] = useState<string | null>(null);
+
+  const [edgeFunctionsPreview, setEdgeFunctionsPreview] = useState<
+    Array<{ slug: string; verify_jwt: boolean }>
+  >([]);
+  const [edgeFunctionsPreviewLoading, setEdgeFunctionsPreviewLoading] = useState(false);
+  const [edgeFunctionsPreviewError, setEdgeFunctionsPreviewError] = useState<string | null>(null);
 
   const [companyName, setCompanyName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -171,6 +202,19 @@ export default function InstallWizardPage() {
     setSupabaseResolvedOk(false);
     setSupabaseResolvedLabel(null);
   }, [supabaseUrl, supabaseAccessToken]);
+
+  useEffect(() => {
+    // “Bruxaria”: se URL + PAT estiverem preenchidos, tenta auto-preencher com debounce.
+    if (!supabaseDeployEdgeFunctions) return;
+    if (!supabaseUrl.trim() || !supabaseAccessToken.trim()) return;
+    if (supabaseResolving || supabaseResolvedOk) return;
+
+    const handle = setTimeout(() => {
+      void resolveSupabase();
+    }, 650);
+
+    return () => clearTimeout(handle);
+  }, [supabaseDeployEdgeFunctions, supabaseUrl, supabaseAccessToken]);
 
   const selectedTargets = useMemo(() => {
     return (Object.entries(targets).filter(([, v]) => v).map(([k]) => k) as Array<
@@ -332,6 +376,111 @@ export default function InstallWizardPage() {
       setSupabaseAdvanced(true);
     } finally {
       setSupabaseResolving(false);
+    }
+  };
+
+  const loadSupabaseProjects = async () => {
+    if (supabaseProjectsLoading) return;
+    setSupabaseProjectsError(null);
+    setSupabaseProjectsLoading(true);
+    try {
+      const res = await fetch('/api/installer/supabase/projects', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          installerToken: installerToken.trim() || undefined,
+          accessToken: supabaseAccessToken.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Falha ao listar projetos (HTTP ${res.status})`);
+      setSupabaseProjects((data?.projects || []) as SupabaseProjectOption[]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao listar projetos';
+      setSupabaseProjectsError(message);
+    } finally {
+      setSupabaseProjectsLoading(false);
+    }
+  };
+
+  const loadSupabaseOrgs = async () => {
+    if (supabaseOrgsLoading) return;
+    setSupabaseOrgsError(null);
+    setSupabaseOrgsLoading(true);
+    try {
+      const res = await fetch('/api/installer/supabase/organizations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          installerToken: installerToken.trim() || undefined,
+          accessToken: supabaseAccessToken.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Falha ao listar orgs (HTTP ${res.status})`);
+      setSupabaseOrgs((data?.organizations || []) as SupabaseOrgOption[]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao listar orgs';
+      setSupabaseOrgsError(message);
+    } finally {
+      setSupabaseOrgsLoading(false);
+    }
+  };
+
+  const createSupabaseProject = async () => {
+    if (supabaseCreating) return;
+    setSupabaseCreateError(null);
+    setSupabaseCreating(true);
+    try {
+      const res = await fetch('/api/installer/supabase/create-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          installerToken: installerToken.trim() || undefined,
+          accessToken: supabaseAccessToken.trim(),
+          organizationSlug: supabaseCreateOrgSlug.trim(),
+          name: supabaseCreateName.trim(),
+          dbPass: supabaseCreateDbPass,
+          regionSmartGroup: supabaseCreateRegion,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Falha ao criar projeto (HTTP ${res.status})`);
+
+      // Auto-select the created project and move on to resolving keys/db.
+      const ref = String(data?.projectRef || '');
+      const url = String(data?.supabaseUrl || '');
+      if (ref) {
+        setSupabaseSelectedProjectRef(ref);
+        setSupabaseProjectRef(ref);
+      }
+      if (url) setSupabaseUrl(url);
+
+      // Immediately resolve keys/db.
+      await resolveSupabase();
+      setSupabaseMode('existing');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao criar projeto';
+      setSupabaseCreateError(message);
+    } finally {
+      setSupabaseCreating(false);
+    }
+  };
+
+  const loadEdgeFunctionsPreview = async () => {
+    if (edgeFunctionsPreviewLoading) return;
+    setEdgeFunctionsPreviewError(null);
+    setEdgeFunctionsPreviewLoading(true);
+    try {
+      const res = await fetch('/api/installer/supabase/functions');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Falha ao listar Edge Functions (HTTP ${res.status})`);
+      setEdgeFunctionsPreview((data?.functions || []) as Array<{ slug: string; verify_jwt: boolean }>);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao listar Edge Functions';
+      setEdgeFunctionsPreviewError(message);
+    } finally {
+      setEdgeFunctionsPreviewLoading(false);
     }
   };
 
@@ -532,6 +681,37 @@ export default function InstallWizardPage() {
                       Quando ligado, o instalador vai setar secrets e fazer deploy das Edge
                       Functions do repositório em <code>supabase/functions/*</code>.
                     </p>
+
+                    <div className="pt-2 space-y-2">
+                      <button
+                        type="button"
+                        onClick={loadEdgeFunctionsPreview}
+                        disabled={edgeFunctionsPreviewLoading}
+                        className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {edgeFunctionsPreviewLoading ? 'Verificando…' : 'Ver quais functions serão deployadas'}
+                      </button>
+
+                      {edgeFunctionsPreviewError ? (
+                        <div className="flex items-start gap-2 text-amber-700 dark:text-amber-300 text-sm">
+                          <AlertCircle className="w-4 h-4 mt-0.5" />
+                          <span>{edgeFunctionsPreviewError}</span>
+                        </div>
+                      ) : null}
+
+                      {edgeFunctionsPreview.length > 0 ? (
+                        <div className="text-xs text-slate-500 dark:text-slate-400 space-y-1">
+                          {edgeFunctionsPreview.map((f) => (
+                            <div key={f.slug} className="flex items-center justify-between gap-3">
+                              <span className="font-mono">{f.slug}</span>
+                              <span className="font-mono">
+                                verify_jwt={String(f.verify_jwt)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -572,6 +752,210 @@ export default function InstallWizardPage() {
                           .
                         </p>
                       </div>
+
+                      <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-900/50 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                            Como você quer configurar o Supabase?
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-200">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="supabase-mode"
+                              checked={supabaseMode === 'existing'}
+                              onChange={() => setSupabaseMode('existing')}
+                              className="accent-primary-600"
+                            />
+                            Selecionar projeto existente (recomendado)
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="supabase-mode"
+                              checked={supabaseMode === 'create'}
+                              onChange={() => setSupabaseMode('create')}
+                              className="accent-primary-600"
+                            />
+                            Criar projeto novo
+                          </label>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Observação: contas free podem ter limite de projetos. Se o Supabase bloquear,
+                          vamos mostrar o erro real aqui.
+                        </p>
+                      </div>
+
+                      {supabaseMode === 'existing' ? (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={loadSupabaseProjects}
+                              disabled={supabaseProjectsLoading || !supabaseAccessToken.trim()}
+                              className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                            >
+                              {supabaseProjectsLoading ? 'Buscando…' : 'Buscar meus projetos'}
+                            </button>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              (usa o PAT)
+                            </span>
+                          </div>
+
+                          {supabaseProjectsError ? (
+                            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-900/20 p-3 text-amber-700 dark:text-amber-300 text-sm">
+                              <AlertCircle size={16} className="mt-0.5" />
+                              <span>{supabaseProjectsError}</span>
+                            </div>
+                          ) : null}
+
+                          {supabaseProjects.length > 0 ? (
+                            <div className="space-y-2">
+                              <label className="text-sm text-slate-600 dark:text-slate-300">
+                                Selecione um projeto
+                              </label>
+                              <select
+                                value={supabaseSelectedProjectRef}
+                                onChange={(e) => {
+                                  const ref = e.target.value;
+                                  setSupabaseSelectedProjectRef(ref);
+                                  const selected = supabaseProjects.find((p) => p.ref === ref) || null;
+                                  if (selected) {
+                                    setSupabaseUrl(selected.supabaseUrl);
+                                    setSupabaseProjectRefTouched(true);
+                                    setSupabaseProjectRef(selected.ref);
+                                    setSupabaseResolveError(null);
+                                  }
+                                }}
+                                className="w-full bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                              >
+                                <option value="">Selecione…</option>
+                                {supabaseProjects.map((p) => (
+                                  <option key={p.ref} value={p.ref}>
+                                    {p.name} — {p.ref}{p.status ? ` (${p.status})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={loadSupabaseOrgs}
+                              disabled={supabaseOrgsLoading || !supabaseAccessToken.trim()}
+                              className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                            >
+                              {supabaseOrgsLoading ? 'Buscando…' : 'Buscar minhas orgs'}
+                            </button>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              (necessário para criar projeto)
+                            </span>
+                          </div>
+
+                          {supabaseOrgsError ? (
+                            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-900/20 p-3 text-amber-700 dark:text-amber-300 text-sm">
+                              <AlertCircle size={16} className="mt-0.5" />
+                              <span>{supabaseOrgsError}</span>
+                            </div>
+                          ) : null}
+
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Organization
+                            </label>
+                            <select
+                              value={supabaseCreateOrgSlug}
+                              onChange={(e) => setSupabaseCreateOrgSlug(e.target.value)}
+                              className="w-full bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                            >
+                              <option value="">Selecione…</option>
+                              {supabaseOrgs.map((o) => (
+                                <option key={o.slug} value={o.slug}>
+                                  {o.name} — {o.slug}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Nome do projeto
+                            </label>
+                            <input
+                              value={supabaseCreateName}
+                              onChange={(e) => setSupabaseCreateName(e.target.value)}
+                              className="w-full bg-slate-50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                              placeholder="ex: crmia-aluno"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Senha do banco (db_pass)
+                            </label>
+                            <input
+                              type="password"
+                              value={supabaseCreateDbPass}
+                              onChange={(e) => setSupabaseCreateDbPass(e.target.value)}
+                              className="w-full bg-slate-50 dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                              placeholder="mínimo 12 caracteres"
+                            />
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Guarde essa senha. Ela é sua credencial do Postgres.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Região (smart group)
+                            </label>
+                            <select
+                              value={supabaseCreateRegion}
+                              onChange={(e) =>
+                                setSupabaseCreateRegion(e.target.value as 'americas' | 'emea' | 'apac')
+                              }
+                              className="w-full bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                            >
+                              <option value="americas">Americas</option>
+                              <option value="emea">EMEA</option>
+                              <option value="apac">APAC</option>
+                            </select>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={createSupabaseProject}
+                            disabled={
+                              supabaseCreating ||
+                              !supabaseAccessToken.trim() ||
+                              !supabaseCreateOrgSlug.trim() ||
+                              !supabaseCreateName.trim() ||
+                              supabaseCreateDbPass.length < 12
+                            }
+                            className="w-full flex justify-center items-center py-3 px-4 rounded-xl text-sm font-bold text-white bg-primary-600 hover:bg-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-primary-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 active:scale-[0.98]"
+                          >
+                            {supabaseCreating ? (
+                              <>
+                                <Loader2 className="animate-spin h-5 w-5 mr-2" />
+                                Criando…
+                              </>
+                            ) : (
+                              'Criar projeto e preencher automaticamente'
+                            )}
+                          </button>
+
+                          {supabaseCreateError ? (
+                            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-900/20 p-3 text-amber-700 dark:text-amber-300 text-sm">
+                              <AlertCircle size={16} className="mt-0.5" />
+                              <span>{supabaseCreateError}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
 
                       <div className="space-y-2">
                         <label className="text-sm text-slate-600 dark:text-slate-300">

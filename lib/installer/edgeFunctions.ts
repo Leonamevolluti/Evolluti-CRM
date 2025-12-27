@@ -71,6 +71,114 @@ async function supabaseManagementFetch(
   return { ok: true, status: res.status, data: parsed ?? (text || {}) };
 }
 
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { maxAttempts: number; baseDelayMs: number }
+): Promise<T> {
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === opts.maxAttempts) break;
+      const jitter = Math.floor(Math.random() * 200);
+      const delay = opts.baseDelayMs * Math.pow(2, attempt - 1) + jitter;
+      await sleep(delay);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Retry failed');
+}
+
+type SupabaseProjectListItem = {
+  id?: number | string;
+  ref?: string;
+  name?: string;
+  region?: string;
+  created_at?: string;
+  status?: string;
+};
+
+type SupabaseOrgListItem = { id?: string; slug?: string; name?: string };
+
+export async function listSupabaseProjects(params: { accessToken: string }): Promise<
+  | { ok: true; projects: Array<{ ref: string; name: string; region?: string; status?: string }>; response: unknown }
+  | { ok: false; error: string; status?: number; response?: unknown }
+> {
+  const res = await supabaseManagementFetch('/v1/projects', params.accessToken, { method: 'GET' });
+  if (!res.ok) return { ok: false, error: res.error, status: res.status, response: res.data };
+
+  const items = (Array.isArray(res.data) ? res.data : []) as SupabaseProjectListItem[];
+  const projects = items
+    .map((p) => ({
+      ref: typeof p.ref === 'string' ? p.ref : '',
+      name: typeof p.name === 'string' ? p.name : '',
+      region: typeof p.region === 'string' ? p.region : undefined,
+      status: typeof p.status === 'string' ? p.status : undefined,
+    }))
+    .filter((p) => p.ref && p.name);
+
+  return { ok: true, projects, response: res.data };
+}
+
+export async function listSupabaseOrganizations(params: { accessToken: string }): Promise<
+  | { ok: true; organizations: Array<{ slug: string; name: string; id?: string }>; response: unknown }
+  | { ok: false; error: string; status?: number; response?: unknown }
+> {
+  const res = await supabaseManagementFetch('/v1/organizations', params.accessToken, { method: 'GET' });
+  if (!res.ok) return { ok: false, error: res.error, status: res.status, response: res.data };
+
+  const items = (Array.isArray(res.data) ? res.data : []) as SupabaseOrgListItem[];
+  const organizations = items
+    .map((o) => ({
+      slug: typeof o.slug === 'string' ? o.slug : '',
+      name: typeof o.name === 'string' ? o.name : '',
+      id: typeof o.id === 'string' ? o.id : undefined,
+    }))
+    .filter((o) => o.slug && o.name);
+
+  return { ok: true, organizations, response: res.data };
+}
+
+export async function createSupabaseProject(params: {
+  accessToken: string;
+  organizationSlug: string;
+  name: string;
+  dbPass: string;
+  regionSmartGroup?: 'americas' | 'emea' | 'apac';
+}): Promise<
+  | { ok: true; projectRef: string; projectName: string; response: unknown }
+  | { ok: false; error: string; status?: number; response?: unknown }
+> {
+  const body = {
+    name: params.name,
+    organization_slug: params.organizationSlug,
+    db_pass: params.dbPass,
+    region_selection: params.regionSmartGroup
+      ? { type: 'smartGroup', code: params.regionSmartGroup }
+      : undefined,
+  };
+
+  const res = await supabaseManagementFetch('/v1/projects', params.accessToken, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) return { ok: false, error: res.error, status: res.status, response: res.data };
+
+  const projectRef = (res.data as any)?.ref;
+  const projectName = (res.data as any)?.name;
+  if (typeof projectRef !== 'string' || !projectRef.trim() || typeof projectName !== 'string') {
+    return { ok: false, error: 'Unexpected response creating project.', status: 500, response: res.data };
+  }
+
+  return { ok: true, projectRef: projectRef.trim(), projectName, response: res.data };
+}
+
 export function extractProjectRefFromSupabaseUrl(supabaseUrl: string): string | null {
   try {
     const url = new URL(supabaseUrl);
@@ -400,13 +508,23 @@ export async function deploySupabaseEdgeFunction(params: {
   });
   await addFilesToFormData(form, functionDir);
 
-  const deploy = await supabaseManagementFetch(
-    `/v1/projects/${encodeURIComponent(params.projectRef)}/functions/deploy?slug=${encodeURIComponent(params.slug)}`,
-    params.accessToken,
-    {
-      method: 'POST',
-      body: form,
-    }
+  const deploy = await withRetry(
+    async () => {
+      const res = await supabaseManagementFetch(
+        `/v1/projects/${encodeURIComponent(params.projectRef)}/functions/deploy?slug=${encodeURIComponent(params.slug)}`,
+        params.accessToken,
+        {
+          method: 'POST',
+          body: form,
+        }
+      );
+      // Retry only on rate limit or server errors.
+      if (!res.ok && (res.status === 429 || res.status >= 500)) {
+        throw new Error(res.error);
+      }
+      return res;
+    },
+    { maxAttempts: 4, baseDelayMs: 750 }
   );
 
   if (!deploy.ok) {
@@ -428,18 +546,26 @@ export async function deployAllSupabaseEdgeFunctions(params: {
   );
   const slugs = await listEdgeFunctionSlugs(functionsRootDir);
 
-  const results: SupabaseFunctionDeployResult[] = [];
-  for (const slug of slugs) {
-    results.push(
-      await deploySupabaseEdgeFunction({
+  const concurrency = 3;
+  const results: SupabaseFunctionDeployResult[] = new Array(slugs.length);
+
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < slugs.length) {
+      const idx = cursor++;
+      const slug = slugs[idx]!;
+      results[idx] = await deploySupabaseEdgeFunction({
         projectRef: params.projectRef,
         accessToken: params.accessToken,
         slug,
         functionsRootDir,
         verifyJwtBySlug,
-      })
-    );
-  }
-  return results;
+      });
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(concurrency, slugs.length) }, () => worker());
+  await Promise.all(workers);
+  return results.filter(Boolean);
 }
 

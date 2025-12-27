@@ -6,6 +6,7 @@ import { triggerProjectRedeploy, upsertProjectEnvs } from '@/lib/installer/verce
 import {
   deployAllSupabaseEdgeFunctions,
   extractProjectRefFromSupabaseUrl,
+  listEdgeFunctionSlugs,
   resolveSupabaseApiKeys,
   resolveSupabaseDbUrlViaCliLoginRole,
   setSupabaseEdgeFunctionSecrets,
@@ -119,7 +120,15 @@ export async function POST(req: Request) {
 
     const needsKeys = !resolvedAnonKey || !resolvedServiceRoleKey;
     const needsDb = !resolvedDbUrl;
-    const needsManagementApi = needsKeys || needsDb || supabase.deployEdgeFunctions;
+
+    // “100% mágico”: se não existir nenhuma Edge Function no repo, não exigir PAT só por deploy.
+    const localEdgeFunctionSlugs = supabase.deployEdgeFunctions
+      ? await listEdgeFunctionSlugs()
+      : [];
+    const hasLocalEdgeFunctions = localEdgeFunctionSlugs.length > 0;
+
+    const needsManagementApi =
+      needsKeys || needsDb || (supabase.deployEdgeFunctions && hasLocalEdgeFunctions);
 
     if (needsManagementApi && (!resolvedAccessToken || !resolvedProjectRef)) {
       const message = !resolvedAccessToken
@@ -201,6 +210,8 @@ export async function POST(req: Request) {
     startStep('supabase_edge_functions');
     if (!supabase.deployEdgeFunctions) {
       finishStep('supabase_edge_functions', 'Skipped (deployEdgeFunctions=false).');
+    } else if (!hasLocalEdgeFunctions) {
+      finishStep('supabase_edge_functions', 'Skipped (no Edge Functions found in repo).');
     } else {
       const secrets = await setSupabaseEdgeFunctionSecrets({
         projectRef: resolvedProjectRef,

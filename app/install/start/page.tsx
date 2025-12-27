@@ -16,6 +16,20 @@ type ProjectInfo = {
   url?: string;
 };
 
+type VercelTeam = {
+  id: string;
+  name: string;
+  slug?: string;
+};
+
+type VercelProject = {
+  id: string;
+  name: string;
+  accountId?: string;
+  alias?: { domain: string }[];
+  targets?: { production?: { alias?: string[] } };
+};
+
 const STORAGE_TOKEN = 'crm_install_token';
 const STORAGE_PROJECT = 'crm_install_project';
 const STORAGE_INSTALLER_TOKEN = 'crm_install_installer_token';
@@ -41,6 +55,14 @@ export default function InstallStartPage() {
     'input'
   );
   const [isLoading, setIsLoading] = useState(false);
+
+  const [teams, setTeams] = useState<VercelTeam[]>([]);
+  const [projects, setProjects] = useState<VercelProject[]>([]);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [usePicker, setUsePicker] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +124,29 @@ export default function InstallStartPage() {
     setStep('validating');
 
     try {
+      if (usePicker && selectedProjectId) {
+        const p = projects.find((x) => x.id === selectedProjectId);
+        if (!p) throw new Error('Selecione um projeto válido.');
+        const productionAliases = p.targets?.production?.alias || [];
+        const projectAliases = p.alias?.map((a) => a.domain) || [];
+        const allAliases = [...productionAliases, ...projectAliases];
+        const primaryUrl =
+          allAliases.find((alias) => alias.endsWith('.vercel.app')) ||
+          allAliases[0] ||
+          `${p.name}.vercel.app`;
+
+        const teamId = selectedTeamId || (p.accountId && p.accountId !== '' ? p.accountId : undefined);
+
+        setProject({
+          id: p.id,
+          name: p.name,
+          teamId,
+          url: primaryUrl,
+        });
+        setStep('confirm');
+        return;
+      }
+
       const response = await fetch('/api/installer/bootstrap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -124,6 +169,40 @@ export default function InstallStartPage() {
       setStep('input');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const lookupVercel = async () => {
+    if (!token.trim()) {
+      setLookupError('Token da Vercel é obrigatório.');
+      return;
+    }
+    if (meta?.requiresToken && !installerToken.trim()) {
+      setLookupError('Installer token obrigatório.');
+      return;
+    }
+
+    setLookupLoading(true);
+    setLookupError(null);
+    try {
+      const res = await fetch('/api/installer/vercel/lookup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          installerToken: installerToken.trim() || undefined,
+          token: token.trim(),
+          teamId: selectedTeamId || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Falha ao buscar dados da Vercel (HTTP ${res.status})`);
+
+      setTeams((data?.teams || []) as VercelTeam[]);
+      setProjects((data?.projects || []) as VercelProject[]);
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : 'Falha ao buscar dados da Vercel');
+    } finally {
+      setLookupLoading(false);
     }
   };
 
@@ -301,6 +380,102 @@ export default function InstallStartPage() {
                     />
                   </div>
 
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-900/50 space-y-3">
+                    <label className="flex items-center justify-between gap-3 text-sm text-slate-700 dark:text-slate-200">
+                      <span className="font-medium">Selecionar projeto automaticamente</span>
+                      <input
+                        type="checkbox"
+                        checked={usePicker}
+                        onChange={(e) => setUsePicker(e.target.checked)}
+                        className="accent-primary-600"
+                        disabled={isLoading}
+                      />
+                    </label>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Se ligado, você busca seus projetos e seleciona 1 (à prova de domínio errado).
+                      Se desligado, tentamos detectar pelo domínio atual automaticamente.
+                    </p>
+
+                    {usePicker ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={lookupVercel}
+                            disabled={lookupLoading || isLoading || !token.trim()}
+                            className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                          >
+                            {lookupLoading ? 'Buscando…' : 'Buscar times/projetos'}
+                          </button>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            (usa o PAT)
+                          </span>
+                        </div>
+
+                        {lookupError ? (
+                          <div className="flex items-start gap-2 text-amber-700 dark:text-amber-300 text-sm">
+                            <AlertCircle className="w-4 h-4 mt-0.5" />
+                            <span>{lookupError}</span>
+                          </div>
+                        ) : null}
+
+                        {teams.length > 0 ? (
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Team (opcional)
+                            </label>
+                            <select
+                              value={selectedTeamId}
+                              onChange={(e) => {
+                                setSelectedTeamId(e.target.value);
+                                setSelectedProjectId('');
+                              }}
+                              className="w-full bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                            >
+                              <option value="">Meu usuário (sem team)</option>
+                              {teams.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name} {t.slug ? `— ${t.slug}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={lookupVercel}
+                              disabled={lookupLoading || isLoading || !token.trim()}
+                              className="text-xs underline underline-offset-2 text-primary-600 dark:text-primary-400"
+                            >
+                              Atualizar projetos deste team
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {projects.length > 0 ? (
+                          <div className="space-y-2">
+                            <label className="text-sm text-slate-600 dark:text-slate-300">
+                              Projeto
+                            </label>
+                            <select
+                              value={selectedProjectId}
+                              onChange={(e) => setSelectedProjectId(e.target.value)}
+                              className="w-full bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500"
+                            >
+                              <option value="">Selecione…</option>
+                              {projects.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} — {p.id}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Dica: se você não achar, confirme se escolheu o Team certo.
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-sm text-slate-600 dark:text-slate-300">
                     <p className="font-medium mb-2 text-slate-700 dark:text-slate-200">
                       Como obter o token:
@@ -350,7 +525,7 @@ export default function InstallStartPage() {
 
                   <button
                     type="submit"
-                    disabled={isLoading || !token.trim()}
+                    disabled={isLoading || !token.trim() || (usePicker && !selectedProjectId && projects.length > 0)}
                     className="w-full bg-primary-600 hover:bg-primary-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 active:scale-[0.98]"
                   >
                     {isLoading ? (

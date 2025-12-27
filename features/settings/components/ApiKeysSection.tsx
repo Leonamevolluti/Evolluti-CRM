@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Key, Copy, ExternalLink, CheckCircle2, Plus, Trash2, ShieldCheck, RefreshCw, TerminalSquare, Play } from 'lucide-react';
 
 import { useOptionalToast } from '@/context/ToastContext';
+import { useBoards } from '@/context/boards/BoardsContext';
+import { useDeals } from '@/context/deals/DealsContext';
 import { supabase } from '@/lib/supabase/client';
 
 import { SettingsSection } from './SettingsSection';
@@ -21,6 +23,8 @@ type ApiKeyRow = {
  */
 export const ApiKeysSection: React.FC = () => {
   const { addToast } = useOptionalToast();
+  const { boards: boardsFromContext } = useBoards();
+  const { rawDeals } = useDeals();
 
   const [action, setAction] = useState<'create_lead' | 'create_deal' | 'move_stage' | 'create_activity'>('create_lead');
   const [keys, setKeys] = useState<ApiKeyRow[]>([]);
@@ -30,18 +34,20 @@ export const ApiKeysSection: React.FC = () => {
   const [newKeyName, setNewKeyName] = useState('n8n');
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [createdPrefix, setCreatedPrefix] = useState<string | null>(null);
+  const [apiKeyToken, setApiKeyToken] = useState<string>(''); // token completo (apenas em memória)
   const [testLoading, setTestLoading] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [boards, setBoards] = useState<Array<{ id: string; key: string | null; name: string }>>([]);
-  const [boardsLoading, setBoardsLoading] = useState(false);
-  const [selectedBoardKey, setSelectedBoardKey] = useState<string>('');
+  const [selectedBoardId, setSelectedBoardId] = useState<string>('');
+  const [selectedDealId, setSelectedDealId] = useState<string>('');
+  const [selectedToStageId, setSelectedToStageId] = useState<string>('');
+  const [activityType, setActivityType] = useState<string>('NOTE');
+  const [activityTitle, setActivityTitle] = useState<string>('Nota via integração');
   const [actionTestLoading, setActionTestLoading] = useState(false);
   const [actionTestResult, setActionTestResult] = useState<{ ok: boolean; message: string; raw?: any } | null>(null);
 
   const openApiUrl = useMemo(() => '/api/public/v1/openapi.json', []);
   const swaggerUrl = useMemo(() => '/api/public/v1/docs', []);
   const meUrl = useMemo(() => '/api/public/v1/me', []);
-  const boardsUrl = useMemo(() => '/api/public/v1/boards?limit=250', []);
   const contactsUrl = useMemo(() => '/api/public/v1/contacts', []);
   const dealsUrl = useMemo(() => '/api/public/v1/deals', []);
   const activitiesUrl = useMemo(() => '/api/public/v1/activities', []);
@@ -98,6 +104,7 @@ export const ApiKeysSection: React.FC = () => {
       if (!token || !prefix) throw new Error('Resposta inválida ao criar chave');
       setCreatedToken(token);
       setCreatedPrefix(prefix);
+      setApiKeyToken(token);
       addToast('Chave criada. Copie agora — ela aparece só uma vez.', 'success');
       await loadKeys();
     } catch (e: any) {
@@ -126,15 +133,16 @@ export const ApiKeysSection: React.FC = () => {
   };
 
   const testMe = async () => {
-    if (!createdToken) {
-      addToast('Crie uma chave primeiro.', 'warning');
+    const token = apiKeyToken.trim() || createdToken?.trim() || '';
+    if (!token) {
+      addToast('Cole uma API key (ou crie uma nova) para testar.', 'warning');
       return;
     }
     setTestLoading(true);
     setTestResult(null);
     try {
       const res = await fetch(meUrl, {
-        headers: { 'X-Api-Key': createdToken },
+        headers: { 'X-Api-Key': token },
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -149,34 +157,33 @@ export const ApiKeysSection: React.FC = () => {
     }
   };
 
-  const loadBoardsViaApi = async () => {
-    if (!createdToken) return;
-    setBoardsLoading(true);
-    try {
-      const res = await fetch(boardsUrl, {
-        headers: { 'X-Api-Key': createdToken },
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || 'Falha ao carregar boards');
-      const rows = (json?.data || []) as Array<any>;
-      setBoards(rows.map((b) => ({ id: b.id, key: b.key ?? null, name: b.name })));
-      if (!selectedBoardKey) {
-        const firstWithKey = rows.find((b) => b.key) as any;
-        if (firstWithKey?.key) setSelectedBoardKey(firstWithKey.key);
-      }
-    } catch (e: any) {
-      addToast(e?.message || 'Erro ao carregar boards', 'error');
-    } finally {
-      setBoardsLoading(false);
+  // Defaults para deixar o wizard "mágico" (usa dados locais do app; não depende da API key)
+  useEffect(() => {
+    if (!selectedBoardId && boardsFromContext?.length) {
+      const firstWithKey = boardsFromContext.find((b) => !!b.key) || boardsFromContext[0];
+      if (firstWithKey?.id) setSelectedBoardId(firstWithKey.id);
     }
-  };
+  }, [boardsFromContext, selectedBoardId]);
 
   useEffect(() => {
-    if (createdToken) void loadBoardsViaApi();
-  }, [createdToken]);
+    // troca de board reseta seleções dependentes
+    setSelectedDealId('');
+    setSelectedToStageId('');
+  }, [selectedBoardId]);
+
+  const selectedBoard = useMemo(
+    () => boardsFromContext.find((b) => b.id === selectedBoardId),
+    [boardsFromContext, selectedBoardId]
+  );
+  const selectedBoardKey = selectedBoard?.key || '';
+  const dealsForBoard = useMemo(() => {
+    if (!selectedBoardId) return [];
+    return rawDeals.filter((d) => d.boardId === selectedBoardId);
+  }, [rawDeals, selectedBoardId]);
+  const stagesForBoard = useMemo(() => selectedBoard?.stages || [], [selectedBoard]);
 
   const curlExample = useMemo(() => {
-    const token = createdToken || 'SUA_API_KEY';
+    const token = (apiKeyToken.trim() || createdToken?.trim() || '') || 'SUA_API_KEY';
     if (action === 'create_lead') {
       return `curl -X POST '${contactsUrl}' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{\n+    \"name\": \"Lead Teste\",\n+    \"email\": \"teste@exemplo.com\",\n+    \"phone\": \"+5511999999999\",\n+    \"source\": \"n8n\"\n+  }'`;
     }
@@ -185,14 +192,17 @@ export const ApiKeysSection: React.FC = () => {
       return `curl -X POST '${dealsUrl}' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{\n+    \"title\": \"Deal Teste\",\n+    \"value\": 0,\n+    \"board_key\": \"${boardKey}\",\n+    \"contact\": {\n+      \"name\": \"Lead Teste\",\n+      \"email\": \"teste@exemplo.com\",\n+      \"phone\": \"+5511999999999\"\n+    }\n+  }'`;
     }
     if (action === 'move_stage') {
-      return `curl -X POST '/api/public/v1/deals/DEAL_ID/move-stage' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{ \"to_stage_id\": \"STAGE_UUID\" }'`;
+      const dealId = selectedDealId || 'DEAL_ID';
+      const stageId = selectedToStageId || 'STAGE_UUID';
+      return `curl -X POST '/api/public/v1/deals/${dealId}/move-stage' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{ \"to_stage_id\": \"${stageId}\" }'`;
     }
-    return `curl -X POST '${activitiesUrl}' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{\n+    \"type\": \"NOTE\",\n+    \"title\": \"Nota\",\n+    \"description\": \"Criada via integração\",\n+    \"date\": \"${new Date().toISOString()}\"\n+  }'`;
-  }, [action, activitiesUrl, contactsUrl, createdToken, dealsUrl, selectedBoardKey]);
+    return `curl -X POST '${activitiesUrl}' \\\n+  -H 'Content-Type: application/json' \\\n+  -H 'X-Api-Key: ${token}' \\\n+  -d '{\n+    \"type\": \"${activityType}\",\n+    \"title\": \"${activityTitle.replaceAll('"', '\\"')}\",\n+    \"description\": \"Criada via integração\",\n+    \"date\": \"${new Date().toISOString()}\"\n+  }'`;
+  }, [action, activitiesUrl, contactsUrl, createdToken, dealsUrl, selectedBoardKey, apiKeyToken, selectedDealId, selectedToStageId, activityTitle, activityType]);
 
   const runActionTest = async () => {
-    if (!createdToken) {
-      addToast('Crie uma chave no Passo 2.', 'warning');
+    const token = (apiKeyToken.trim() || createdToken?.trim() || '') || '';
+    if (!token) {
+      addToast('Cole uma API key (ou crie uma nova) para testar.', 'warning');
       return;
     }
     setActionTestLoading(true);
@@ -201,7 +211,7 @@ export const ApiKeysSection: React.FC = () => {
       if (action === 'create_lead') {
         const res = await fetch(contactsUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Api-Key': createdToken },
+          headers: { 'Content-Type': 'application/json', 'X-Api-Key': token },
           body: JSON.stringify({
             name: 'Lead Teste',
             email: `teste+${Date.now()}@exemplo.com`,
@@ -217,13 +227,13 @@ export const ApiKeysSection: React.FC = () => {
 
       if (action === 'create_deal') {
         if (!selectedBoardKey) {
-          addToast('Escolha um board no Passo 3.', 'warning');
-          setActionTestResult({ ok: false, message: 'Selecione um board_key primeiro.' });
+          addToast('Escolha um board com key (slug) para criar deal.', 'warning');
+          setActionTestResult({ ok: false, message: 'Selecione um board com key.' });
           return;
         }
         const res = await fetch(dealsUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Api-Key': createdToken },
+          headers: { 'Content-Type': 'application/json', 'X-Api-Key': token },
           body: JSON.stringify({
             title: `Deal Teste ${new Date().toLocaleTimeString('pt-BR')}`,
             value: 0,
@@ -244,10 +254,10 @@ export const ApiKeysSection: React.FC = () => {
       if (action === 'create_activity') {
         const res = await fetch(activitiesUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Api-Key': createdToken },
+          headers: { 'Content-Type': 'application/json', 'X-Api-Key': token },
           body: JSON.stringify({
-            type: 'NOTE',
-            title: 'Nota via integração',
+            type: activityType,
+            title: activityTitle,
             description: 'Criada pelo teste da UI',
             date: new Date().toISOString(),
           }),
@@ -258,7 +268,27 @@ export const ApiKeysSection: React.FC = () => {
         return;
       }
 
-      setActionTestResult({ ok: false, message: 'Teste automático para mover etapa entra no próximo passo (precisa DEAL_ID + STAGE_ID).' });
+      if (action === 'move_stage') {
+        if (!selectedDealId) {
+          addToast('Selecione um deal para mover.', 'warning');
+          setActionTestResult({ ok: false, message: 'Selecione um deal.' });
+          return;
+        }
+        if (!selectedToStageId) {
+          addToast('Selecione a etapa de destino.', 'warning');
+          setActionTestResult({ ok: false, message: 'Selecione uma etapa.' });
+          return;
+        }
+        const res = await fetch(`/api/public/v1/deals/${selectedDealId}/move-stage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Api-Key': token },
+          body: JSON.stringify({ to_stage_id: selectedToStageId }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || 'Falha no teste');
+        setActionTestResult({ ok: true, message: 'OK (deal movido)', raw: json });
+        return;
+      }
     } catch (e: any) {
       setActionTestResult({ ok: false, message: e?.message || 'Erro no teste' });
     } finally {
@@ -274,35 +304,16 @@ export const ApiKeysSection: React.FC = () => {
         A documentação técnica (OpenAPI/Swagger) fica disponível, mas só quando você quiser.
       </p>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
-          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Passo 1 — O que você quer automatizar?
-          </div>
-          <select
-            value={action}
-            onChange={(e) => setAction(e.target.value as any)}
-            className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-          >
-            <option value="create_lead">Criar/Atualizar Lead (Contato)</option>
-            <option value="create_deal">Criar Negócio (Deal)</option>
-            <option value="move_stage">Mover etapa do Deal</option>
-            <option value="create_activity">Criar Atividade (nota/tarefa)</option>
-          </select>
-
-          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <span>Produto primeiro: você escolhe o objetivo, a gente te entrega o “copiar/colar”.</span>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
-          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Passo 2 — Gere sua chave
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2 flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            Chave da integração (independente do assistente)
           </div>
           <div className="text-xs text-slate-600 dark:text-slate-300 mb-3">
-            Você vai colar essa chave no n8n/Make. Ela aparece <strong>uma vez</strong>.
+            A chave é da sua conta. O assistente só usa ela para montar o “copiar/colar” e testar.
           </div>
+
           <div className="flex gap-2">
             <input
               value={newKeyName}
@@ -345,86 +356,161 @@ export const ApiKeysSection: React.FC = () => {
               <div className="mt-2 text-xs text-emerald-700/80 dark:text-emerald-200/80">
                 Prefixo: <span className="font-mono">{createdPrefix}</span>
               </div>
+            </div>
+          )}
 
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={testMe}
-                  disabled={testLoading}
-                  className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-semibold"
+          <div className="mt-3 rounded-lg border border-slate-200 dark:border-white/10 bg-white/60 dark:bg-black/20 p-3">
+            <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-2">
+              Para testar aqui (opcional): cole a API key completa
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={apiKeyToken}
+                onChange={(e) => setApiKeyToken(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white font-mono text-xs"
+                placeholder="ncrm_… (fica só em memória, não é salvo)"
+              />
+              <button
+                type="button"
+                onClick={testMe}
+                disabled={testLoading}
+                className="shrink-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-60 text-slate-800 dark:text-white text-sm font-semibold"
+              >
+                {testLoading ? 'Testando…' : 'Testar chave'}
+              </button>
+            </div>
+            {testResult && (
+              <div className={`mt-2 text-xs ${testResult.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>
+                {testResult.message}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
+            Passo 1 — O que você quer automatizar?
+          </div>
+          <select
+            value={action}
+            onChange={(e) => setAction(e.target.value as any)}
+            className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          >
+            <option value="create_lead">Criar/Atualizar Lead (Contato)</option>
+            <option value="create_deal">Criar Negócio (Deal)</option>
+            <option value="move_stage">Mover etapa do Deal</option>
+            <option value="create_activity">Criar Atividade (nota/tarefa)</option>
+          </select>
+
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            <span>Você escolhe o objetivo. O sistema monta o comando final com seus dados.</span>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
+            Passo 2 — Configure (dinâmico)
+          </div>
+          <div className="text-xs text-slate-600 dark:text-slate-300 mb-3">
+            Aqui entra o “mágico”: você escolhe e a gente já preenche o comando final.
+          </div>
+
+          {(action === 'create_deal' || action === 'move_stage') && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Pipeline (board)</div>
+                <select
+                  value={selectedBoardId}
+                  onChange={(e) => setSelectedBoardId(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white"
                 >
-                  {testLoading ? 'Testando…' : 'Testar agora'}
-                </button>
-                {testResult && (
-                  <div className={`text-xs ${testResult.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>
-                    {testResult.message}
+                  <option value="">Selecione…</option>
+                  {boardsFromContext.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}{b.key ? ` — ${b.key}` : ' — (sem key)'}
+                    </option>
+                  ))}
+                </select>
+                {selectedBoardId && !selectedBoardKey && (
+                  <div className="mt-1 text-xs text-rose-600 dark:text-rose-300">
+                    Este board ainda não tem <span className="font-mono">key</span>. Para integrações, gere uma key para o board.
                   </div>
                 )}
               </div>
-            </div>
-          )}
-        </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4 lg:col-span-2">
-          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Passo 3 — Escolha seu pipeline (board)
-          </div>
-          <div className="text-xs text-slate-600 dark:text-slate-300 mb-3">
-            A integração usa a <strong>chave (slug)</strong> do board — não precisa de UUID.
-          </div>
-
-          {!createdToken ? (
-            <div className="text-sm text-slate-600 dark:text-slate-300">
-              Crie uma chave no Passo 2 para listar seus boards via API.
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 mb-2">
-                <button
-                  type="button"
-                  onClick={loadBoardsViaApi}
-                  disabled={boardsLoading}
-                  className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-800 dark:text-white text-sm font-semibold inline-flex items-center gap-2"
-                >
-                  <RefreshCw className={`h-4 w-4 ${boardsLoading ? 'animate-spin' : ''}`} />
-                  Carregar boards via API
-                </button>
-                <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                  GET {boardsUrl}
+              {action === 'move_stage' && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Deal</div>
+                  <select
+                    value={selectedDealId}
+                    onChange={(e) => setSelectedDealId(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white"
+                  >
+                    <option value="">Selecione…</option>
+                    {dealsForBoard.slice(0, 250).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.title} — {d.id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                    Mostrando até 250 deals do board selecionado.
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <select
-                value={selectedBoardKey}
-                onChange={(e) => setSelectedBoardKey(e.target.value)}
-                className="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              >
-                <option value="">Selecione…</option>
-                {boards.map((b) => (
-                  <option key={b.id} value={b.key || ''} disabled={!b.key}>
-                    {b.name}{b.key ? ` — ${b.key}` : ' — (sem chave)'}
-                  </option>
-                ))}
-              </select>
+              {action === 'move_stage' && (
+                <div className="md:col-span-2">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Mover para etapa</div>
+                  <select
+                    value={selectedToStageId}
+                    onChange={(e) => setSelectedToStageId(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white"
+                  >
+                    <option value="">Selecione…</option>
+                    {stagesForBoard.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label} — {s.id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
 
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => selectedBoardKey && copy('board_key', selectedBoardKey)}
-                  disabled={!selectedBoardKey}
-                  className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 disabled:opacity-60 text-slate-800 dark:text-white text-sm font-semibold inline-flex items-center gap-2"
+          {action === 'create_activity' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Tipo</div>
+                <select
+                  value={activityType}
+                  onChange={(e) => setActivityType(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white"
                 >
-                  <Copy className="h-4 w-4" />
-                  Copiar board_key
-                </button>
+                  <option value="NOTE">Nota</option>
+                  <option value="TASK">Tarefa</option>
+                  <option value="CALL">Ligação</option>
+                  <option value="MEETING">Reunião</option>
+                  <option value="EMAIL">Email</option>
+                </select>
               </div>
-            </>
+              <div>
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Título</div>
+                <input
+                  value={activityTitle}
+                  onChange={(e) => setActivityTitle(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-slate-900 dark:text-white"
+                />
+              </div>
+            </div>
           )}
         </div>
 
-        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4 lg:col-span-2">
+        <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
           <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Passo 4 — Documentação (OpenAPI)
+            Passo 3 — Documentação (OpenAPI)
           </div>
           <div className="text-xs text-slate-600 dark:text-slate-300 mb-3">
             Se você (ou o time técnico) precisar, aqui está o OpenAPI para importar em Swagger/Postman e gerar integrações.
@@ -463,13 +549,9 @@ export const ApiKeysSection: React.FC = () => {
         </div>
       </div>
 
-      <div className="mt-4 text-xs text-slate-500 dark:text-slate-400">
-        Passo 4 (em andamento): vamos adicionar “Copiar cURL” e “Prova de funcionamento” (logs) para {action.replaceAll('_', ' ')}.
-      </div>
-
       <div className="mt-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-black/30 p-4">
         <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-          Passo 5 — Copiar e testar
+          Passo 4 — Copiar e testar
         </div>
         <div className="text-xs text-slate-600 dark:text-slate-300 mb-3">
           Este é o “copiar/colar” que seu usuário precisa. Se funcionar aqui, funciona no n8n.

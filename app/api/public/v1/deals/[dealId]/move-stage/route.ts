@@ -7,8 +7,11 @@ import { isValidUUID, sanitizeUUID } from '@/lib/supabase/utils';
 export const runtime = 'nodejs';
 
 const MoveStageSchema = z.object({
-  to_stage_id: z.string().uuid(),
-}).strict();
+  to_stage_id: z.string().uuid().optional(),
+  to_stage_label: z.string().min(1).optional(),
+}).strict().refine((v) => !!(v.to_stage_id || v.to_stage_label), {
+  message: 'to_stage_id or to_stage_label is required',
+});
 
 export async function POST(request: Request, ctx: { params: Promise<{ dealId: string }> }) {
   const auth = await authPublicApi(request);
@@ -25,7 +28,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ dealId: st
     return NextResponse.json({ error: 'Invalid payload', code: 'VALIDATION_ERROR' }, { status: 422 });
   }
 
-  const toStageId = sanitizeUUID(parsed.data.to_stage_id);
+  const toStageIdFromBody = parsed.data.to_stage_id ? sanitizeUUID(parsed.data.to_stage_id) : null;
+  const toStageLabel = (parsed.data.to_stage_label || '').trim();
   const sb = createStaticAdminClient();
 
   // Load deal to ensure org isolation and get board_id
@@ -39,22 +43,48 @@ export async function POST(request: Request, ctx: { params: Promise<{ dealId: st
   if (dealError) return NextResponse.json({ error: dealError.message, code: 'DB_ERROR' }, { status: 500 });
   if (!deal) return NextResponse.json({ error: 'Deal not found', code: 'NOT_FOUND' }, { status: 404 });
 
-  // Validate stage belongs to the same board (safety)
-  const { data: stage, error: stageError } = await sb
-    .from('board_stages')
-    .select('id')
-    .eq('organization_id', auth.organizationId)
-    .eq('board_id', (deal as any).board_id)
-    .eq('id', toStageId)
-    .maybeSingle();
-  if (stageError) return NextResponse.json({ error: stageError.message, code: 'DB_ERROR' }, { status: 500 });
-  if (!stage) return NextResponse.json({ error: 'Stage not found for this board', code: 'VALIDATION_ERROR' }, { status: 422 });
+  const boardId = (deal as any).board_id as string;
+
+  // Resolve stage by label (human-friendly) or validate stage_id belongs to board (safety)
+  let resolvedToStageId: string | null = toStageIdFromBody;
+
+  if (!resolvedToStageId && toStageLabel) {
+    const { data: stages, error: stagesError } = await sb
+      .from('board_stages')
+      .select('id,label')
+      .eq('organization_id', auth.organizationId)
+      .eq('board_id', boardId)
+      .ilike('label', toStageLabel)
+      .limit(2);
+    if (stagesError) return NextResponse.json({ error: stagesError.message, code: 'DB_ERROR' }, { status: 500 });
+    if (!stages || stages.length === 0) {
+      return NextResponse.json({ error: 'Stage not found for this board', code: 'VALIDATION_ERROR' }, { status: 422 });
+    }
+    if (stages.length > 1) {
+      return NextResponse.json({ error: 'Ambiguous stage label for this board', code: 'VALIDATION_ERROR' }, { status: 422 });
+    }
+    resolvedToStageId = (stages[0] as any).id;
+  }
+
+  if (resolvedToStageId) {
+    const { data: stage, error: stageError } = await sb
+      .from('board_stages')
+      .select('id')
+      .eq('organization_id', auth.organizationId)
+      .eq('board_id', boardId)
+      .eq('id', resolvedToStageId)
+      .maybeSingle();
+    if (stageError) return NextResponse.json({ error: stageError.message, code: 'DB_ERROR' }, { status: 500 });
+    if (!stage) return NextResponse.json({ error: 'Stage not found for this board', code: 'VALIDATION_ERROR' }, { status: 422 });
+  } else {
+    return NextResponse.json({ error: 'Invalid payload', code: 'VALIDATION_ERROR' }, { status: 422 });
+  }
 
   const now = new Date().toISOString();
   const { data, error } = await sb
     .from('deals')
     .update({
-      stage_id: toStageId,
+      stage_id: resolvedToStageId,
       last_stage_change_date: now,
       updated_at: now,
     })

@@ -10,6 +10,18 @@
     - Deploy via `POST /v1/projects/{ref}/functions/deploy?slug=<slug>` com `multipart/form-data` e `metadata` incluindo `entrypoint_path`, `verify_jwt` (lido de `supabase/config.toml`, default `true`) e `import_map_path` quando existir `import_map.json`.
     - Resposta do instalador agora inclui `functions[]` com status por slug (`ok`/`error`); o step vira `warning` quando alguma function falha.
 
+- **Installer (Padrão “100% mágico” para aluno)**:
+  - Vercel: `install/start` agora permite **buscar times/projetos via PAT** e selecionar o projeto (fluxo mais à prova de domínio errado).
+  - Supabase:
+    - Wizard permite **listar projetos via PAT** e selecionar (preenche `projectRef`/`supabaseUrl`).
+    - Wizard permite **criar projeto via PAT** (listar orgs → criar projeto com `db_pass` + região smart group) e já auto-preencher o resto.
+    - Auto-preenchimento passou a priorizar keys **`publishable/secret`** com fallback para `anon/service_role`.
+    - Auto-resolve roda automaticamente (debounce) quando URL+PAT estão preenchidos.
+    - Preview de Edge Functions em `GET /api/installer/supabase/functions` (lista slugs + `verify_jwt` inferido).
+  - Edge Functions:
+    - Deploy ganhou **concorrência limitada** e **retry/backoff** (reduz falhas transitórias).
+    - O step `supabase_edge_functions` agora **auto-skip** quando não existem functions no repo (não exige PAT só por isso).
+
 - **Database (Migrations / Onboarding do aluno)**:
   - Consolidado o schema do Supabase para **1 única migration** em `supabase/migrations/20251201000000_schema_init.sql`.
   - Detalhes técnicos: baseline inclui `organization_settings.ai_enabled`, `ai_prompt_templates`, `ai_feature_flags`, `boards.default_product_id`, contexto de empresa/participantes em `activities`, e Integrações/Webhooks (`pg_net`, tabelas `integration_*`/`webhook_*` e trigger em `deals`).
@@ -63,6 +75,7 @@
   - Adicionados endpoints de **Boards**: `GET /api/public/v1/boards`, `GET /api/public/v1/boards/{boardKeyOrId}`, `GET /api/public/v1/boards/{boardKeyOrId}/stages`, e integração disso na UI (selecionar pipeline via `board_key`).
   - Implementados endpoints essenciais (escopo B): **Companies**, **Contacts**, **Deals**, **Activities** e ações (`move-stage`, `mark-won`, `mark-lost`), com OpenAPI atualizado e botões “Copiar cURL”/“Testar agora” na UI.
   - Swagger UI em `GET /api/public/v1/docs` (renderiza o OpenAPI do CRM), com CSS refinado para um visual mais clean e legível.
+  - UX (produto): o assistente agora usa dados do próprio app (boards/deals/stages) para montar o cURL **com valores reais** (wizard dinâmico), e a **API key virou independente do wizard** (colar/validar chave é opcional e fica só em memória).
 - **Debug Mode (UX)**:
   - Debug agora é **reativo** (sem refresh): toggle dispara evento (`DEBUG_MODE_EVENT`) e `DebugFillButton` usa `useDebugMode`.
   - Fix: geração de telefone fake agora é determinística (sem `fromRegExp`, evitando `\\` no número).
