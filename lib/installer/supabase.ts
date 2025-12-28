@@ -8,23 +8,42 @@ type BootstrapInput = {
   password: string;
 };
 
+type BootstrapResult =
+  | { ok: false; error: string }
+  | { ok: true; organizationId: string; userId: string; mode: 'created' | 'updated' };
+
+async function findUserIdByEmail(
+  admin: any,
+  email: string
+): Promise<string | null> {
+  // Supabase Auth Admin API não tem "getUserByEmail" no client;
+  // para o nosso caso (1 usuário no bootstrap) listar é OK.
+  const target = email.trim().toLowerCase();
+
+  let page = 1;
+  const perPage = 200;
+
+  for (let i = 0; i < 10; i++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) return null;
+
+    const users = data?.users || [];
+    const found = users.find((u) => (u.email || '').toLowerCase() === target);
+    if (found?.id) return found.id;
+
+    if (users.length < perPage) return null;
+    page += 1;
+  }
+
+  return null;
+}
+
 /**
  * Função pública `bootstrapInstance` do projeto.
  *
- * @param {BootstrapInput} {
-  supabaseUrl,
-  serviceRoleKey,
-  companyName,
-  email,
-  password,
-} - Parâmetro `{
-  supabaseUrl,
-  serviceRoleKey,
-  companyName,
-  email,
-  password,
-}`.
- * @returns {Promise<{ ok: false; error: string; organizationId?: undefined; userId?: undefined; } | { ok: true; organizationId: any; userId: string; error?: undefined; }>} Retorna um valor do tipo `Promise<{ ok: false; error: string; organizationId?: undefined; userId?: undefined; } | { ok: true; organizationId: any; userId: string; error?: undefined; }>`.
+ * Contrato padronizado do installer:
+ * - É **idempotente**: pode rodar mais de uma vez.
+ * - Garante que o admin informado consegue logar: cria o usuário ou **atualiza a senha** se já existir.
  */
 export async function bootstrapInstance({
   supabaseUrl,
@@ -32,59 +51,91 @@ export async function bootstrapInstance({
   companyName,
   email,
   password,
-}: BootstrapInput) {
+}: BootstrapInput): Promise<BootstrapResult> {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
 
+  const emailNorm = email.trim().toLowerCase();
+
+  // 1) Organization (reusa se já existir)
   const { data: existingOrgs, error: orgCheckError } = await admin
     .from('organizations')
     .select('id')
     .limit(1);
 
-  if (orgCheckError) {
-    return { ok: false as const, error: orgCheckError.message };
+  if (orgCheckError) return { ok: false, error: orgCheckError.message };
+
+  let organizationId: string | null = existingOrgs?.[0]?.id || null;
+  let createdOrg = false;
+
+  if (!organizationId) {
+    const { data: organization, error: orgError } = await admin
+      .from('organizations')
+      .insert({ name: companyName })
+      .select('id')
+      .single();
+
+    if (orgError || !organization?.id) {
+      return { ok: false, error: orgError?.message || 'Failed to create organization' };
+    }
+
+    organizationId = organization.id;
+    createdOrg = true;
   }
 
-  if (existingOrgs && existingOrgs.length > 0) {
-    return { ok: false as const, error: 'Instance already initialized' };
+  // 2) Auth user (cria ou atualiza)
+  let userId: string | null = await findUserIdByEmail(admin, emailNorm);
+  let mode: 'created' | 'updated' = 'updated';
+
+  if (!userId) {
+    const { data: userData, error: userError } = await admin.auth.admin.createUser({
+      email: emailNorm,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        role: 'admin',
+        organization_id: organizationId,
+      },
+    });
+
+    if (userError || !userData?.user?.id) {
+      if (createdOrg && organizationId) {
+        await admin.from('organizations').delete().eq('id', organizationId);
+      }
+      return { ok: false, error: userError?.message || 'Failed to create admin user' };
+    }
+
+    userId = userData.user.id;
+    mode = 'created';
+  } else {
+    // Sempre garante que a senha digitada é a senha válida para login.
+    const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
+      password,
+      email_confirm: true,
+      user_metadata: {
+        role: 'admin',
+        organization_id: organizationId,
+      },
+    });
+
+    if (updateError) {
+      return { ok: false, error: updateError.message };
+    }
+
+    mode = 'updated';
   }
 
-  const { data: organization, error: orgError } = await admin
-    .from('organizations')
-    .insert({ name: companyName })
-    .select()
-    .single();
-
-  if (orgError || !organization) {
-    return { ok: false as const, error: orgError?.message || 'Failed to create organization' };
-  }
-
-  const { data: userData, error: userError } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: {
-      role: 'admin',
-      organization_id: organization.id,
-    },
-  });
-
-  if (userError || !userData?.user) {
-    await admin.from('organizations').delete().eq('id', organization.id);
-    return { ok: false as const, error: userError?.message || 'Failed to create admin user' };
-  }
-
-  const userId = userData.user.id;
-  const displayName = email.split('@')[0] || 'Admin';
+  // 3) Profile upsert
+  const displayName = emailNorm.split('@')[0] || 'Admin';
 
   const { error: profileError } = await admin.from('profiles').upsert(
     {
       id: userId,
-      email,
+      email: emailNorm,
       name: displayName,
       first_name: displayName,
-      organization_id: organization.id,
+      organization_id: organizationId,
       role: 'admin',
       updated_at: new Date().toISOString(),
     },
@@ -92,14 +143,17 @@ export async function bootstrapInstance({
   );
 
   if (profileError) {
-    await admin.auth.admin.deleteUser(userId);
-    await admin.from('organizations').delete().eq('id', organization.id);
-    return { ok: false as const, error: profileError.message };
+    // Se foi uma criação de org nessa execução, tenta rollback.
+    if (createdOrg && organizationId) {
+      await admin.from('organizations').delete().eq('id', organizationId);
+    }
+    return { ok: false, error: profileError.message };
   }
 
   return {
-    ok: true as const,
-    organizationId: organization.id,
+    ok: true,
+    organizationId: organizationId!,
     userId,
+    mode,
   };
 }

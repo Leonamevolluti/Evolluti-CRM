@@ -3,6 +3,7 @@ import { isAllowedOrigin } from '@/lib/security/sameOrigin';
 import { runSchemaMigration } from '@/lib/installer/migrations';
 import { bootstrapInstance } from '@/lib/installer/supabase';
 import { triggerProjectRedeploy, upsertProjectEnvs } from '@/lib/installer/vercel';
+import { validateInstallerPassword } from '@/lib/installer/passwordPolicy';
 import {
   deployAllSupabaseEdgeFunctions,
   extractProjectRefFromSupabaseUrl,
@@ -47,7 +48,12 @@ const RunSchema = z
     admin: z.object({
       companyName: z.string().min(1).max(200),
       email: z.string().email(),
-      password: z.string().min(6),
+      password: z.string().superRefine((val, ctx) => {
+        const r = validateInstallerPassword(val);
+        if (!r.ok) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: r.error });
+        }
+      }),
     }),
     // Health check result to skip unnecessary steps
     healthCheck: HealthCheckResultSchema,
@@ -133,6 +139,43 @@ interface StreamEvent {
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+
+async function verifyPasswordLogin(params: {
+  supabaseUrl: string;
+  anonKey: string;
+  email: string;
+  password: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const base = params.supabaseUrl.replace(/\/$/, '');
+  const url = base + '/auth/v1/token?grant_type=password';
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: params.anonKey,
+        Authorization: 'Bearer ' + params.anonKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ email: params.email, password: params.password }),
+    });
+
+    if (res.ok) return { ok: true };
+
+    const data = (await res.json().catch(() => null)) as any;
+    const msg =
+      data?.error_description ||
+      data?.msg ||
+      data?.message ||
+      data?.error ||
+      ('HTTP ' + res.status);
+
+    return { ok: false, error: String(msg) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Falha ao validar login' };
+  }
+}
+
 
 // Helper for retry logic
 async function withRetry<T>(
@@ -231,7 +274,8 @@ export async function POST(req: Request) {
   if (healthCheck?.skipWaitProject) skippedSteps.push('wait_project');
   if (healthCheck?.skipWaitStorage) skippedSteps.push('wait_storage');
   if (healthCheck?.skipMigrations) skippedSteps.push('migrations');
-  if (healthCheck?.skipBootstrap) skippedSteps.push('bootstrap');
+  // NOTE: não pulamos o bootstrap: ele é a garantia de que o admin informado consegue logar.
+  // (Se o login já estiver ok, ele vira um no-op.)
   
   // Extrai primeiro nome para personalização
   const firstName = admin.companyName.split(' ')[0] || 'você';
@@ -462,6 +506,22 @@ export async function POST(req: Request) {
         await withRetry(
           'bootstrap',
           async () => {
+            // Se o login já funciona com a senha informada, podemos tratar como no-op.
+            // Caso contrário, rodamos o bootstrap (idempotente) para criar/ajustar credenciais e validamos de novo.
+            const login1 = await verifyPasswordLogin({
+              supabaseUrl: supabase.url,
+              anonKey: resolvedAnonKey,
+              email: admin.email,
+              password: admin.password,
+            });
+
+            if (login1.ok) {
+              console.log('[run-stream] bootstrap: login já ok, pulando ajuste de credenciais');
+              return;
+            }
+
+            console.log('[run-stream] bootstrap: login falhou, garantindo credenciais via bootstrap…', login1.error);
+
             const bootstrap = await bootstrapInstance({
               supabaseUrl: supabase.url,
               serviceRoleKey: resolvedServiceRoleKey,
@@ -469,7 +529,19 @@ export async function POST(req: Request) {
               email: admin.email,
               password: admin.password,
             });
-            if (!bootstrap.ok) throw new Error('Falha ao estabelecer primeiro contato.');
+
+            if (!bootstrap.ok) throw new Error(bootstrap.error || 'Falha ao estabelecer primeiro contato.');
+
+            const login2 = await verifyPasswordLogin({
+              supabaseUrl: supabase.url,
+              anonKey: resolvedAnonKey,
+              email: admin.email,
+              password: admin.password,
+            });
+
+            if (!login2.ok) {
+              throw new Error('Não conseguimos validar seu login com a senha informada. ' + login2.error);
+            }
           },
           sendEvent,
           (err) => {

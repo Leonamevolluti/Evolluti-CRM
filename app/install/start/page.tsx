@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, User, Rocket, Database, Eye, EyeOff } from 'lucide-react';
 import { AnimatePresence, motion, useMotionValue, useSpring } from 'framer-motion';
+import { validateInstallerPassword } from '@/lib/installer/passwordPolicy';
 
 type InstallerMeta = { enabled: boolean; requiresToken: boolean };
 
@@ -161,6 +162,7 @@ export default function InstallStartPage() {
     
     if (inputHash === savedPassHash) {
       localStorage.setItem(STORAGE_SESSION_LOCKED, 'false');
+      sessionStorage.setItem('crm_install_user_pass', unlockPassword);
       const savedToken = localStorage.getItem(STORAGE_TOKEN);
       const savedSupabaseToken = localStorage.getItem('crm_install_supabase_token');
       
@@ -192,8 +194,9 @@ export default function InstallStartPage() {
       setError('Digite um e-mail válido');
       return;
     }
-    if (!pass || pass.length < 6) {
-      setError('Senha deve ter no mínimo 6 caracteres');
+    const pwCheck = validateInstallerPassword(pass);
+    if (!pwCheck.ok) {
+      setError(pwCheck.error);
       return;
     }
     if (pass !== confirm) {

@@ -7,6 +7,12 @@
   - Evita o loop de ~10min em `migrations` aguardando `storage.buckets`
 
 
+- **Installer — Senha padronizada e login garantido**:
+  - **Política única de senha**: min 8 + (1 letra + 1 número) aplicada em `/install/start`, `/install/wizard` e no payload do `/api/installer/run-stream`
+  - **Bootstrap idempotente**: `bootstrapInstance` não falha mais com "Instance already initialized"; ele cria ou atualiza o admin e **garante a senha**
+  - **Login verificado antes do final**: o `run-stream` valida `email+senha` via `/auth/v1/token` e só conclui se o login funcionar
+
+
 - **Installer — Nome de projeto já existe (retry/F5)**:
   - **`create-project` agora é resiliente**: se o Supabase responder "already exists", o backend lista projetos da org e **reaproveita** o projeto existente em vez de travar
 

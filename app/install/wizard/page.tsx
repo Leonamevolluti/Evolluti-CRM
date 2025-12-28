@@ -14,6 +14,7 @@ import {
   getProgressSummary,
   type InstallState,
 } from '@/lib/installer/installState';
+import { validateInstallerPassword } from '@/lib/installer/passwordPolicy';
 
 // Types
 type InstallerMeta = { enabled: boolean; requiresToken: boolean };
@@ -253,7 +254,7 @@ export default function InstallWizardPage() {
   const vercelReady = Boolean(vercelToken.trim() && project?.id);
   const supabaseReady = Boolean(supabaseUrl.trim() && supabaseResolvedOk && !supabaseProvisioning);
   // Admin já foi coletado no /install/start - userName serve como "companyName"
-  const adminReady = Boolean(userName.trim() && adminEmail.trim() && adminPassword.length >= 6);
+  const adminReady = Boolean(userName.trim() && adminEmail.trim() && validateInstallerPassword(adminPassword).ok);
   const canInstall = Boolean(meta?.enabled && vercelReady && supabaseReady && adminReady);
   
   const allFreeActiveProjects = useMemo(() => {
