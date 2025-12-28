@@ -71,6 +71,7 @@
     - Fix (Supabase seleção de projeto): ao escolher um projeto de uma organização, o wizard agora usa a lista **da própria org** (e fallback por `ref`) para preencher `supabaseUrl/projectRef`, evitando o caso de “lista aparece, mas não seleciona”.
     - UX (Supabase projetos visíveis): a seleção de projetos da org agora é feita via **cards** (abrir/usar) em vez de `<select>`, evitando casos de “lista veio, mas não aparece”.
     - UX (Apple A/B): introduzidos componentes **A** `PairingCard` (palco principal) e **B** `ActionSheet` (bottom sheet) e aplicado no passo Supabase: 1 CTA “Escolher projeto” abre o sheet com seleção de **org → projeto** (estilo pareamento).
+    - UI (cinema): adicionado `components/ui/spatial-product-showcase.tsx` (inspirado no `21st.dev`) e usado como **palco full-screen** no `/install/wizard` por trás do formulário, com máscara/vignette para manter legibilidade. O palco agora tem **4 cenas** (Autorização/Destino/Sincronização/Primeiro contato) e troca automaticamente conforme `currentStep` e `supabaseUiStep`.
     - UX (zero fricção): ao colar um PAT válido, o Supabase step tenta listar orgs automaticamente e **auto-avança** para “Destino” quando a verificação passa; se houver apenas 1 org, ela é selecionada automaticamente e o sistema já carrega os projetos.
 
 - **Build (fix)**:

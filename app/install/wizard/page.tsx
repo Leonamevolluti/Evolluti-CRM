@@ -7,6 +7,7 @@ import { AnimatePresence, motion, useMotionValue, useSpring } from 'framer-motio
 import { ActionSheet } from '@/components/ui/ActionSheet';
 import { PairingCard } from '@/components/ui/PairingCard';
 import { cn } from '@/utils/cn';
+import SpatialProductShowcase, { type ProductId as SpatialProductId } from '@/components/ui/spatial-product-showcase';
 
 type InstallerMeta = {
   enabled: boolean;
@@ -1075,6 +1076,22 @@ export default function InstallWizardPage() {
     );
   }
 
+  const cinematicSide: SpatialProductId = useMemo(() => {
+    // Chapter mapping:
+    // - Step 0 (Vercel): Autorização (entrada/permite seguir)
+    // - Step 1 (Supabase): sub-capítulos (PAT → Destino → Sincronização)
+    // - Step 2 (Admin): Sincronização (últimos detalhes)
+    // - Step 3 (Review): Primeiro contato (ignição)
+    if (currentStep === 0) return 'auth';
+    if (currentStep === 1) {
+      if (supabaseUiStep === 'pat') return 'auth';
+      if (supabaseUiStep === 'project') return 'destination';
+      return 'sync';
+    }
+    if (currentStep === 2) return 'sync';
+    return 'contact';
+  }, [currentStep, supabaseUiStep]);
+
   return (
     <div
       className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-dark-bg relative overflow-hidden"
@@ -1082,6 +1099,17 @@ export default function InstallWizardPage() {
       onMouseLeave={clearParallax}
     >
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
+        {/* Cinematic stage (21st.dev-style showcase) */}
+        <div className="absolute inset-0 opacity-[0.75] saturate-110 contrast-110">
+          <SpatialProductShowcase
+            activeSide={cinematicSide}
+            showSwitcher={false}
+            className="min-h-screen pointer-events-none"
+          />
+        </div>
+
+        {/* Mask + vignette to keep legibility for the foreground sheet */}
+        <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-black/25 to-black/55" />
         {/* Vignette */}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.06)_0%,rgba(2,6,23,0)_42%,rgba(2,6,23,0.88)_100%)] dark:opacity-100 opacity-0" />
         {/* Film grain (SVG noise, very subtle) */}
@@ -1093,13 +1121,13 @@ export default function InstallWizardPage() {
           }}
         />
 
-        {/* Nebula blobs (parallax) */}
+        {/* Keep the old nebula blobs subtle under the showcase (optional) */}
         <motion.div
-          className="absolute -top-[20%] -right-[10%] w-[50%] h-[50%] rounded-full blur-[120px] bg-cyan-500/18"
+          className="absolute -top-[25%] -right-[15%] w-[45%] h-[45%] rounded-full blur-[140px] bg-cyan-500/10"
           style={{ x: mxSpring, y: mySpring }}
         />
         <motion.div
-          className="absolute top-[40%] -left-[10%] w-[40%] h-[40%] rounded-full blur-[100px] bg-teal-500/16"
+          className="absolute top-[45%] -left-[15%] w-[40%] h-[40%] rounded-full blur-[120px] bg-teal-500/10"
           style={{ x: mxSpring, y: mySpring }}
         />
       </div>
