@@ -2,6 +2,10 @@
 
 ## 28/12/2025
 
+- **Installer Wizard — Needspace com banner de pausa**:
+  - **UX**: na tela "Precisamos de espaço", ao clicar em **Pausar**, o wizard agora mostra o mesmo banner de espera (estilo modal de conflito) e esconde a lista até a pausa concluir.
+  - **Arquivo**: `app/install/wizard/page.tsx`
+
 - **Installer Wizard — Pause realmente confiável (status + UX)**:
   - **Correção**: Polling de pausa agora tem dois modos:
     - **`pause`**: só finaliza quando o projeto estiver efetivamente pausado (`INACTIVE` / `INACTIVE_*` / `PAUSED`).
