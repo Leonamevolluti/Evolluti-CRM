@@ -1107,16 +1107,41 @@ export default function InstallWizardPage() {
                       {(conflictingProject.status?.toUpperCase() === 'ACTIVE_HEALTHY' || conflictingProject.status?.toUpperCase() === 'ACTIVE') && (
                         <button
                           onClick={async () => {
-                            setSupabasePausingRef(conflictingProject.ref);
-                            await pauseProject(conflictingProject.ref);
-                            setSupabasePausingRef(null);
-                            // After pausing, offer to delete
+                            try {
+                              setSupabasePausingRef(conflictingProject.ref);
+                              setPausePolling(true);
+                              setSupabaseCreateError(null);
+                              
+                              // 1. Chama API para pausar
+                              const res = await fetch('/api/installer/supabase/pause-project', {
+                                method: 'POST',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({ 
+                                  installerToken: installerToken.trim() || undefined, 
+                                  accessToken: supabaseAccessToken.trim(), 
+                                  projectRef: conflictingProject.ref 
+                                }),
+                              });
+                              if (!res.ok) throw new Error('Falha ao pausar');
+                              
+                              // 2. Aguarda projeto pausar (polling)
+                              const finalStatus = await pollProjectStatus(conflictingProject.ref);
+                              
+                              // 3. Atualiza o status do conflictingProject
+                              setConflictingProject({ ...conflictingProject, status: finalStatus });
+                              
+                            } catch (err) {
+                              setSupabaseCreateError(err instanceof Error ? err.message : 'Erro ao pausar');
+                            } finally {
+                              setSupabasePausingRef(null);
+                              setPausePolling(false);
+                            }
                           }}
-                          disabled={supabasePausingRef === conflictingProject.ref}
+                          disabled={supabasePausingRef === conflictingProject.ref || pausePolling}
                           className="w-full px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-white font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                          {supabasePausingRef === conflictingProject.ref ? (
-                            <><Loader2 className="w-5 h-5 animate-spin" /> Pausando...</>
+                          {(supabasePausingRef === conflictingProject.ref || pausePolling) ? (
+                            <><Loader2 className="w-5 h-5 animate-spin" /> {pausePolling ? 'Aguardando pausar...' : 'Pausando...'}</>
                           ) : (
                             <><Pause className="w-5 h-5" /> Pausar projeto</>
                           )}
@@ -1128,7 +1153,8 @@ export default function InstallWizardPage() {
                           setSupabaseCreateError(null);
                           setShowDeleteConfirm(true);
                         }}
-                        className="w-full px-6 py-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-medium transition-all flex items-center justify-center gap-2"
+                        disabled={pausePolling}
+                        className="w-full px-6 py-3 rounded-xl bg-red-500/10 disabled:opacity-50 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-medium transition-all flex items-center justify-center gap-2"
                       >
                         <AlertCircle className="w-5 h-5" /> Deletar projeto
                       </button>
@@ -1139,7 +1165,8 @@ export default function InstallWizardPage() {
                           setSupabaseCreateError(null);
                           setSupabaseUiStep('pat');
                         }}
-                        className="w-full px-6 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-medium transition-all"
+                        disabled={pausePolling}
+                        className="w-full px-6 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-medium transition-all disabled:opacity-50"
                       >
                         Usar outro nome
                       </button>
