@@ -19,7 +19,7 @@ interface ChannelIndicatorProps {
   className?: string;
 }
 
-const CHANNEL_CONFIG: Record<
+export const CHANNEL_CONFIG: Record<
   ChannelType,
   {
     icon: React.FC<{ className?: string }>;

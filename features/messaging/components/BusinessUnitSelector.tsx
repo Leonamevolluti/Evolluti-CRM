@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useState, useMemo } from 'react';
+import React, { memo, useState, useMemo, useEffect, useCallback } from 'react';
 import { Building2, ChevronDown, Check, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useBusinessUnits } from '@/lib/query/hooks/useBusinessUnitsQuery';
@@ -43,6 +43,20 @@ export const BusinessUnitSelector = memo(function BusinessUnitSelector({
     onSelect(null);
   };
 
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false);
+      }
+    },
+    [isOpen]
+  );
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
   return (
     <div className={cn('relative', className)}>
       {/* Trigger */}
@@ -50,6 +64,8 @@ export const BusinessUnitSelector = memo(function BusinessUnitSelector({
         type="button"
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
         className={cn(
           'w-full flex items-center justify-between gap-2 px-3 py-2',
           'bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg',
@@ -102,6 +118,7 @@ export const BusinessUnitSelector = memo(function BusinessUnitSelector({
 
           {/* Options */}
           <div
+            role="listbox"
             className={cn(
               'absolute z-20 w-full mt-1 py-1',
               'bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 rounded-lg shadow-lg',
@@ -111,6 +128,8 @@ export const BusinessUnitSelector = memo(function BusinessUnitSelector({
             {showAllOption && (
               <button
                 type="button"
+                role="option"
+                aria-selected={selectedUnitId === null}
                 onClick={() => handleSelect(null)}
                 className={cn(
                   'w-full flex items-center justify-between gap-2 px-3 py-2 text-sm',
@@ -140,6 +159,8 @@ export const BusinessUnitSelector = memo(function BusinessUnitSelector({
               <button
                 key={unit.id}
                 type="button"
+                role="option"
+                aria-selected={selectedUnitId === unit.id}
                 onClick={() => handleSelect(unit.id)}
                 className={cn(
                   'w-full flex items-center justify-between gap-2 px-3 py-2 text-sm',

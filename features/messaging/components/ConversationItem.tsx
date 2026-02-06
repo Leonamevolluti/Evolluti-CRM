@@ -3,9 +3,10 @@
 import React, { memo } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { MessageSquare, Instagram, Mail, Phone, Clock, User } from 'lucide-react';
+import { Clock, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { sanitizeUrl } from '@/lib/utils/sanitize';
+import { ChannelIndicator } from './ChannelIndicator';
 import type { ConversationView } from '@/lib/messaging/types';
 
 interface ConversationItemProps {
@@ -13,41 +14,6 @@ interface ConversationItemProps {
   isSelected: boolean;
   onClick: () => void;
 }
-
-const ChannelIcon = memo(function ChannelIcon({ type }: { type: string }) {
-  switch (type) {
-    case 'whatsapp':
-      return (
-        <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
-          <MessageSquare className="w-2.5 h-2.5 text-white" />
-        </div>
-      );
-    case 'instagram':
-      return (
-        <div className="w-4 h-4 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-          <Instagram className="w-2.5 h-2.5 text-white" />
-        </div>
-      );
-    case 'email':
-      return (
-        <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center">
-          <Mail className="w-2.5 h-2.5 text-white" />
-        </div>
-      );
-    case 'sms':
-      return (
-        <div className="w-4 h-4 rounded-full bg-yellow-500 flex items-center justify-center">
-          <Phone className="w-2.5 h-2.5 text-white" />
-        </div>
-      );
-    default:
-      return (
-        <div className="w-4 h-4 rounded-full bg-gray-500 flex items-center justify-center">
-          <MessageSquare className="w-2.5 h-2.5 text-white" />
-        </div>
-      );
-  }
-});
 
 export const ConversationItem = memo(function ConversationItem({
   conversation,
@@ -100,7 +66,7 @@ export const ConversationItem = memo(function ConversationItem({
         )}
         {/* Channel indicator */}
         <div className="absolute -bottom-0.5 -right-0.5">
-          <ChannelIcon type={channelType} />
+          <ChannelIndicator type={channelType} size="sm" />
         </div>
       </div>
 

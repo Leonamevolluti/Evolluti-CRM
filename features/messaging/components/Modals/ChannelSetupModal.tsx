@@ -3,8 +3,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Loader2,
-  MessageCircle,
-  Instagram,
   AlertCircle,
   CheckCircle,
   ExternalLink,
@@ -16,6 +14,7 @@ import {
   Settings,
   Info,
 } from 'lucide-react';
+import { CHANNEL_CONFIG } from '../ChannelIndicator';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/context/ToastContext';
 import { cn } from '@/lib/utils';
@@ -174,19 +173,6 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
 };
 
 // =============================================================================
-// CHANNEL ICONS
-// =============================================================================
-
-const CHANNEL_ICONS: Record<ChannelType, React.FC<{ className?: string }>> = {
-  whatsapp: MessageCircle,
-  instagram: Instagram,
-  email: () => null,
-  sms: () => null,
-  telegram: () => null,
-  voice: () => null,
-};
-
-// =============================================================================
 // STATUS BADGE
 // =============================================================================
 
@@ -264,7 +250,7 @@ function InfoView({
   onDelete,
   isToggling,
 }: InfoViewProps) {
-  const Icon = CHANNEL_ICONS[channel.channelType];
+  const Icon = CHANNEL_CONFIG[channel.channelType]?.icon ?? CHANNEL_CONFIG.whatsapp.icon;
   const typeInfo = CHANNEL_TYPE_INFO[channel.channelType];
   const config = PROVIDER_CONFIGS[`${channel.channelType}:${channel.provider}`];
   const isConnected = channel.status === 'connected';
@@ -888,3 +874,5 @@ export function ChannelSetupModal({
     </Modal>
   );
 }
+
+export default ChannelSetupModal;

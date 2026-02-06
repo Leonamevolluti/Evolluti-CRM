@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * TanStack Query hooks for Messaging Conversations
  *
@@ -23,9 +25,6 @@ import type {
   ConversationView,
   ConversationFilters,
   UpdateConversationInput,
-  transformConversation,
-  isWindowExpired,
-  getWindowMinutesRemaining,
 } from '@/lib/messaging/types';
 import {
   transformConversation as transform,

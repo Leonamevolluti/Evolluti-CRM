@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * TanStack Query hooks for Messaging Messages (query-only)
  *

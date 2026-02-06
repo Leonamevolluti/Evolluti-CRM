@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { memo } from 'react';
 import { cn } from '@/lib/utils';
 
 interface ContactPanelSkeletonProps {
@@ -18,7 +18,7 @@ function SkeletonPulse({ className }: { className?: string }) {
   );
 }
 
-export function ContactPanelSkeleton({ className }: ContactPanelSkeletonProps) {
+export const ContactPanelSkeleton = memo(function ContactPanelSkeleton({ className }: ContactPanelSkeletonProps) {
   return (
     <div className={cn('flex flex-col h-full', className)}>
       {/* Header */}
@@ -87,6 +87,6 @@ export function ContactPanelSkeleton({ className }: ContactPanelSkeletonProps) {
       </div>
     </div>
   );
-}
+});
 
 export default ContactPanelSkeleton;
