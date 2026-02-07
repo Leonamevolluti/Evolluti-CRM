@@ -4,6 +4,7 @@ import React from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useCRM } from '@/context/CRMContext';
 import { AIConfigSection } from './components/AIConfigSection';
+import { AIAgentConfigSection } from './components/ai/AIAgentConfigSection';
 import { AIFeaturesSection } from './components/AIFeaturesSection';
 
 /**
@@ -57,6 +58,10 @@ export const AICenterSettings: React.FC = () => {
       </div>
 
       <AIConfigSection />
+
+      <div className="mt-8">
+        <AIAgentConfigSection />
+      </div>
 
       <div className="mt-6">
         <AIFeaturesSection />

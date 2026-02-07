@@ -290,7 +290,19 @@ export async function getLearnedPatterns(
     return null;
   }
 
-  return data.ai_learned_patterns as LearnedPattern;
+  const patterns = data.ai_learned_patterns;
+
+  // Verificar se é objeto vazio (default do JSONB)
+  if (typeof patterns !== 'object' || patterns === null) {
+    return null;
+  }
+
+  // Verificar se tem as propriedades essenciais
+  if (!patterns.greetingStyle && !patterns.learnedCriteria) {
+    return null;
+  }
+
+  return patterns as LearnedPattern;
 }
 
 // =============================================================================
