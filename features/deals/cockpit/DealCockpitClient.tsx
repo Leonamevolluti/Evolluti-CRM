@@ -13,6 +13,7 @@ import {
   HeartPulse,
   Inbox,
   MessageCircle,
+  Mic,
   Phone,
   Search,
   Sparkles,
@@ -32,6 +33,7 @@ import { useQuickScripts } from '@/features/inbox/hooks/useQuickScripts';
 
 import { UIChat } from '@/components/ai/UIChat';
 import { CallModal, type CallLogData } from '@/features/inbox/components/CallModal';
+import { VoiceCallButton } from '@/features/voice/components/VoiceCallButton';
 import { MessageComposerModal, type MessageChannel, type MessageExecutedEvent } from '@/features/inbox/components/MessageComposerModal';
 import { ScheduleModal, type ScheduleData, type ScheduleType } from '@/features/inbox/components/ScheduleModal';
 
@@ -1625,7 +1627,7 @@ export default function DealCockpitClient({ dealId }: { dealId?: string }) {
                   Executar agora
                 </button>
 
-                <div className="grid w-full grid-cols-4 gap-2">
+                <div className="grid w-full grid-cols-5 gap-2">
                   <button
                     type="button"
                     className="flex flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/3 px-2 py-2 hover:bg-white/5"
@@ -1636,6 +1638,11 @@ export default function DealCockpitClient({ dealId }: { dealId?: string }) {
                     <Phone className="h-4 w-4 text-slate-200" />
                     <span className="text-[10px] font-semibold text-slate-300">Ligar</span>
                   </button>
+
+                  <VoiceCallButton
+                    dealId={deal.id}
+                    className="flex flex-col items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/3 px-2 py-2 hover:bg-white/5"
+                  />
 
                   <button
                     type="button"
