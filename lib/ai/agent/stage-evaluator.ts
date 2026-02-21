@@ -76,8 +76,12 @@ export interface EvaluateAdvancementParams {
   };
   /** ID da organização para criar pending advances */
   organizationId: string;
-  /** Threshold de HITL da organização (default: 0.85) */
+  /** Threshold de HITL da organização (default: 0.85). DB: ai_hitl_threshold. */
   hitlThreshold?: number;
+  /** Min confidence para sugerir avanço (default: 0.70). DB: ai_hitl_min_confidence. */
+  hitlMinConfidence?: number;
+  /** Horas até expirar pending advance (default: 24). DB: ai_hitl_expiration_hours. */
+  hitlExpirationHours?: number;
   /** ID da conversa para vincular ao pending advance */
   conversationId?: string;
 }
@@ -199,11 +203,11 @@ Avalie cada critério de avanço e decida se o lead deve avançar para o próxim
       return { success: true, evaluation, advanced: false };
     }
 
-    // Usar HITL config para decidir
+    // Usar HITL config para decidir — valores vêm do banco via agent.service
     const hitlConfig: HITLConfig = {
       hitlThreshold: params.hitlThreshold ?? 0.85,
-      minConfidenceToSuggest: 0.70,
-      expirationHours: 24,
+      minConfidenceToSuggest: params.hitlMinConfidence ?? 0.70,
+      expirationHours: params.hitlExpirationHours ?? 24,
     };
 
     const hitlDecision = determineHITLDecision(

@@ -28,6 +28,24 @@ import type {
   AgentProcessResult,
 } from './types';
 
+/**
+ * Prompt base padrão do agente — usado quando a organização não configurou
+ * um prompt próprio em organization_settings.ai_base_system_prompt.
+ * Edite via Settings > IA > Prompt Base para customizar por organização.
+ */
+const DEFAULT_BASE_SYSTEM_PROMPT = `Você é um assistente de vendas profissional.
+Seu objetivo é ajudar leads a avançar no funil de vendas de forma natural e consultiva.
+
+REGRAS IMPORTANTES:
+1. Seja cordial e profissional, mas não robótico
+2. Use o nome do lead quando apropriado
+3. Faça perguntas para entender as necessidades
+4. Nunca invente informações sobre produtos/serviços
+5. Se não souber responder algo, diga que vai verificar
+6. Mantenha respostas concisas (máximo 3-4 frases)
+7. Use emojis com moderação (máximo 1 por mensagem)
+8. NUNCA revele que você é uma IA`;
+
 // =============================================================================
 // Organization AI Config
 // =============================================================================
@@ -40,12 +58,20 @@ export interface OrgAIConfig {
   model: string;
   apiKey: string;
   hitlThreshold: number;
+  /** Min confidence to surface a stage-advance suggestion. DB: ai_hitl_min_confidence. Default 0.70. */
+  hitlMinConfidence: number;
+  /** Hours before a pending HITL advance expires. DB: ai_hitl_expiration_hours. Default 24. */
+  hitlExpirationHours: number;
   configMode: AIConfigMode;
   learnedPatterns: LearnedPattern | null;
   templateId: string | null;
   takeoverEnabled: boolean;
   takeoverMinutes: number;
   allKeys: Record<AIProvider, string | null>;
+  /** Org-level base system prompt (rules, tone, identity). DB: ai_base_system_prompt. Null → use built-in default. */
+  baseSystemPrompt: string | null;
+  /** Org timezone. DB: timezone. Default 'America/Sao_Paulo'. */
+  timezone: string;
 }
 
 /**
@@ -58,7 +84,7 @@ export async function getOrgAIConfig(
   const { data: orgSettings, error } = await supabase
     .from('organization_settings')
     .select(
-      'ai_enabled, ai_provider, ai_model, ai_google_key, ai_openai_key, ai_anthropic_key, ai_hitl_threshold, ai_config_mode, ai_learned_patterns, ai_template_id, ai_takeover_enabled, ai_takeover_minutes'
+      'ai_enabled, ai_provider, ai_model, ai_google_key, ai_openai_key, ai_anthropic_key, ai_hitl_threshold, ai_hitl_min_confidence, ai_hitl_expiration_hours, ai_config_mode, ai_learned_patterns, ai_template_id, ai_takeover_enabled, ai_takeover_minutes, ai_base_system_prompt, timezone'
     )
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -112,7 +138,9 @@ export async function getOrgAIConfig(
     provider,
     model: orgSettings.ai_model || AI_DEFAULT_MODELS[provider],
     apiKey,
-    hitlThreshold: orgSettings.ai_hitl_threshold ?? 0.85, // default 0.85
+    hitlThreshold: orgSettings.ai_hitl_threshold ?? 0.85,
+    hitlMinConfidence: orgSettings.ai_hitl_min_confidence ?? 0.70,
+    hitlExpirationHours: orgSettings.ai_hitl_expiration_hours ?? 24,
     configMode: (orgSettings.ai_config_mode as AIConfigMode) || 'zero_config',
     learnedPatterns,
     templateId: orgSettings.ai_template_id || null,
@@ -123,6 +151,8 @@ export async function getOrgAIConfig(
       openai: orgSettings.ai_openai_key || null,
       anthropic: orgSettings.ai_anthropic_key || null,
     },
+    baseSystemPrompt: orgSettings.ai_base_system_prompt || null,
+    timezone: orgSettings.timezone || 'America/Sao_Paulo',
   };
 }
 
@@ -438,6 +468,8 @@ export async function processIncomingMessage(
         },
         organizationId,
         hitlThreshold: aiConfig.hitlThreshold,
+        hitlMinConfidence: aiConfig.hitlMinConfidence,
+        hitlExpirationHours: aiConfig.hitlExpirationHours,
         conversationId,
       });
 
@@ -487,7 +519,8 @@ async function generateResponse(params: GenerateResponseParams): Promise<AgentDe
     context,
     stageConfig,
     aiConfig.learnedPatterns,
-    aiConfig.configMode
+    aiConfig.configMode,
+    aiConfig.baseSystemPrompt
   );
   const contextText = formatContextForPrompt(context);
 
@@ -541,16 +574,18 @@ function buildSystemPrompt(
   context: LeadContext,
   config: StageAIConfig,
   learnedPatterns: LearnedPattern | null,
-  configMode: AIConfigMode
+  configMode: AIConfigMode,
+  orgBasePrompt: string | null
 ): string {
+  // Usa prompt base da org (editável em Settings > IA) ou o padrão embutido
+  const basePrompt = orgBasePrompt || DEFAULT_BASE_SYSTEM_PROMPT;
+
   // Se modo Auto-Learn e tem padrões aprendidos, usar sistema de padrões
   if (configMode === 'auto_learn' && learnedPatterns) {
     console.log('[AIAgent] Using learned patterns for response generation');
 
-    // Construir prompt CONVERSACIONAL baseado nos padrões aprendidos
     const learnedPrompt = buildConversationalPromptFromPatterns(learnedPatterns);
 
-    // Adicionar contexto da organização e estágio
     return `${learnedPrompt}
 
 ## Contexto da Organização
@@ -572,33 +607,16 @@ ${config.system_prompt}
   }
 
   // Modo padrão (zero_config, template, advanced)
-  const basePrompt = `
-Você é um assistente de vendas da ${context.organization.name}.
-Seu objetivo é ajudar leads a avançar no funil de vendas de forma natural e consultiva.
+  const stageSection = `
+## Contexto
+Você está representando: ${context.organization.name}
 
-REGRAS IMPORTANTES:
-1. Seja cordial e profissional, mas não robótico
-2. Use o nome do lead quando apropriado
-3. Faça perguntas para entender as necessidades
-4. Nunca invente informações sobre produtos/serviços
-5. Se não souber responder algo, diga que vai verificar
-6. Mantenha respostas concisas (máximo 3-4 frases)
-7. Use emojis com moderação (máximo 1 por mensagem)
-8. NUNCA revele que você é uma IA
+${config.stage_goal ? `OBJETIVO DESTE ESTÁGIO:\n${config.stage_goal}\n` : ''}
+${config.advancement_criteria.length > 0 ? `PARA AVANÇAR O LEAD, VOCÊ PRECISA:\n${config.advancement_criteria.map((c) => `- ${c}`).join('\n')}\n` : ''}`;
 
-${config.stage_goal ? `
-OBJETIVO DESTE ESTÁGIO:
-${config.stage_goal}
-` : ''}
-
-${config.advancement_criteria.length > 0 ? `
-PARA AVANÇAR O LEAD, VOCÊ PRECISA:
-${config.advancement_criteria.map((c) => `- ${c}`).join('\n')}
-` : ''}
-`;
-
-  // Adicionar prompt customizado do estágio
   return `${basePrompt}
+
+${stageSection}
 
 INSTRUÇÕES ESPECÍFICAS:
 ${config.system_prompt}
