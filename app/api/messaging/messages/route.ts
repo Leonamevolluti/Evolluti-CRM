@@ -25,7 +25,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch conversation to get channel info and recipient
+    // Fetch caller's organization
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('organization_id')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile?.organization_id) {
+      return NextResponse.json({ message: 'Profile not found' }, { status: 404 });
+    }
+
+    const orgId = profile.organization_id;
+
+    // Fetch conversation to get channel info and recipient — scoped to org (prevents IDOR)
     const { data: conversation, error: convError } = await supabase
       .from('messaging_conversations')
       .select(`
@@ -37,6 +50,7 @@ export async function POST(request: NextRequest) {
         )
       `)
       .eq('id', conversationId)
+      .eq('organization_id', orgId)
       .single();
 
     if (convError || !conversation) {

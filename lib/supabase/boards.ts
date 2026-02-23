@@ -504,14 +504,18 @@ export const boardsService = {
         }
 
         if (realWonStageId || realLostStageId) {
-          await supabase.from('boards').update({
+          const { error: wonLostError } = await supabase.from('boards').update({
             won_stage_id: realWonStageId,
             lost_stage_id: realLostStageId
           }).eq('id', newBoard.id);
 
-          // Update the local newBoard object to reflect this for response
-          if (realWonStageId) (newBoard as DbBoard).won_stage_id = realWonStageId;
-          if (realLostStageId) (newBoard as DbBoard).lost_stage_id = realLostStageId;
+          if (wonLostError) {
+            console.error('[boards] Failed to update won/lost stage IDs (non-fatal):', wonLostError.message);
+          } else {
+            // Update the local newBoard object to reflect this for response
+            if (realWonStageId) (newBoard as DbBoard).won_stage_id = realWonStageId;
+            if (realLostStageId) (newBoard as DbBoard).lost_stage_id = realLostStageId;
+          }
         }
       }
 

@@ -23,6 +23,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
 
+    // Fetch caller's organization
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('organization_id')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile?.organization_id) {
+      return NextResponse.json({ message: 'Profile not found' }, { status: 404 });
+    }
+
+    const orgId = profile.organization_id;
+
     const body: MergeRequestBody = await request.json();
     const { sourceId, targetId } = body;
 
@@ -30,6 +43,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { message: 'sourceId and targetId are required' },
         { status: 400 }
+      );
+    }
+
+    // Verify both contacts belong to the caller's organization (prevents IDOR)
+    const { data: ownershipCheck, error: ownershipError } = await supabase
+      .from('contacts')
+      .select('id')
+      .in('id', [sourceId, targetId])
+      .eq('organization_id', orgId)
+      .is('deleted_at', null);
+
+    if (ownershipError) {
+      return NextResponse.json({ message: 'Failed to verify contacts' }, { status: 500 });
+    }
+
+    if (!ownershipCheck || ownershipCheck.length !== 2) {
+      return NextResponse.json(
+        { message: 'One or both contacts not found in your organization' },
+        { status: 403 }
       );
     }
 
