@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     return NextResponse.json(jsonRpcError(null, -32600, 'Invalid Request'), { status: 400 });
   }
 
-  // initialize and notifications/initialized are public — MCP clients probe without auth
+  // Public methods — MCP clients probe without auth during registration
   if (body.method === 'initialize') {
     return NextResponse.json(
       jsonRpcResult(body.id, {
@@ -103,7 +103,20 @@ export async function POST(request: Request) {
     return new NextResponse(null, { status: 204 });
   }
 
-  // All other methods require authentication
+  // tools/list is public — tool names/descriptions are not sensitive
+  if (body.method === 'tools/list') {
+    const { buildCrmMcpRegistry: _reg } = await import('@/lib/mcp/crmRegistry');
+    const registry = _reg({ context: { organizationId: '' }, userId: '' });
+    const tools = registry.tools.map((t) => ({
+      name: t.name,
+      title: t.title,
+      description: t.description,
+      inputSchema: zodToJsonSchema2020(t.inputSchemaZod),
+    }));
+    return NextResponse.json(jsonRpcResult(body.id, { tools }));
+  }
+
+  // All other methods (tools/call) require authentication
   const auth = await authMcp(request);
   if (!auth.ok) {
     return NextResponse.json({ jsonrpc: '2.0', id: body.id ?? null, error: { code: -32001, message: auth.body.error, data: auth.body } }, { status: auth.status });
