@@ -291,46 +291,46 @@ export const ContactPanel = memo(function ContactPanel({
             <InfoRow icon={User} label="Atribuído para" value={assignedUserName} />
           )}
           <div className="flex items-center justify-between gap-3">
-              <div className="flex items-start gap-3">
-                {isAiPaused ? (
-                  <BotOff className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                ) : (
-                  <Bot className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    IA {contactId ? '(contato)' : '(conversa)'}
-                  </p>
-                  <p className="text-sm text-slate-900 dark:text-white">
-                    {isAiPaused ? 'Pausada' : 'Ativa'}
-                  </p>
-                </div>
+            <div className="flex items-start gap-3">
+              {isAiPaused ? (
+                <BotOff className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+              ) : (
+                <Bot className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+              )}
+              <div className="min-w-0">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  IA {contactId ? '(contato)' : '(conversa)'}
+                </p>
+                <p className="text-sm text-slate-900 dark:text-white">
+                  {isAiPaused ? 'Pausada' : 'Ativa'}
+                </p>
               </div>
-              <button
-                type="button"
-                disabled={isPending}
-                onClick={handleToggleAiPause}
-                className={cn(
-                  'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent',
-                  'transition-colors duration-200 ease-in-out focus:outline-none',
-                  isAiPaused ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700',
-                  isPending && 'opacity-50 cursor-not-allowed'
-                )}
-                title={
-                  isAiPaused
-                    ? contactId ? 'Reativar IA para este contato' : 'Reativar IA para esta conversa'
-                    : contactId ? 'Pausar IA para este contato' : 'Pausar IA para esta conversa'
-                }
-              >
-                <span
-                  className={cn(
-                    'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0',
-                    'transition duration-200 ease-in-out',
-                    isAiPaused ? 'translate-x-4' : 'translate-x-0'
-                  )}
-                />
-              </button>
             </div>
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={handleToggleAiPause}
+              className={cn(
+                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent',
+                'transition-colors duration-200 ease-in-out focus:outline-none',
+                isAiPaused ? 'bg-amber-500' : 'bg-slate-200 dark:bg-slate-700',
+                isPending && 'opacity-50 cursor-not-allowed'
+              )}
+              title={
+                isAiPaused
+                  ? contactId ? 'Reativar IA para este contato' : 'Reativar IA para esta conversa'
+                  : contactId ? 'Pausar IA para este contato' : 'Pausar IA para esta conversa'
+              }
+            >
+              <span
+                className={cn(
+                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0',
+                  'transition duration-200 ease-in-out',
+                  isAiPaused ? 'translate-x-4' : 'translate-x-0'
+                )}
+              />
+            </button>
+          </div>
         </Section>
 
         {/* Conversation Stats */}

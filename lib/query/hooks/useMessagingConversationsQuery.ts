@@ -224,7 +224,6 @@ export function useMessagingConversation(conversationId: string | undefined) {
             avatar,
             ai_paused
           ),
-
           assigned_user:profiles!assigned_user_id (
             id,
             name,
