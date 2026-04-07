@@ -21,11 +21,16 @@ export const dealNotesService = {
         if (!supabase) {
             return { data: null as DealNote[] | null, error: new Error('Supabase não configurado') };
         }
+
         const { data, error } = await supabase
             .from('deal_notes')
             .select('*')
             .eq('deal_id', dealId)
             .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error('Erro ao buscar notas:', error);
+        }
 
         return { data: data as DealNote[] | null, error };
     },
@@ -37,17 +42,24 @@ export const dealNotesService = {
         if (!supabase) {
             return { data: null as DealNote | null, error: new Error('Supabase não configurado') };
         }
+
         const { data: { user } } = await supabase.auth.getUser();
 
         const { data, error } = await supabase
             .from('deal_notes')
-            .insert({
-                deal_id: dealId,
-                content,
-                created_by: user?.id || null,
-            })
+            .insert([
+                {
+                    deal_id: dealId,
+                    content,
+                    created_by: user?.id || null,
+                }
+            ])
             .select()
             .single();
+
+        if (error) {
+            console.error('Erro ao criar nota:', error);
+        }
 
         return { data: data as DealNote | null, error };
     },
@@ -59,12 +71,17 @@ export const dealNotesService = {
         if (!supabase) {
             return { data: null as DealNote | null, error: new Error('Supabase não configurado') };
         }
+
         const { data, error } = await supabase
             .from('deal_notes')
             .update({ content })
             .eq('id', noteId)
             .select()
-            .maybeSingle();
+            .single();
+
+        if (error) {
+            console.error('Erro ao atualizar nota:', error);
+        }
 
         return { data: data as DealNote | null, error };
     },
@@ -76,10 +93,15 @@ export const dealNotesService = {
         if (!supabase) {
             return { error: new Error('Supabase não configurado') };
         }
+
         const { error } = await supabase
             .from('deal_notes')
             .delete()
             .eq('id', noteId);
+
+        if (error) {
+            console.error('Erro ao deletar nota:', error);
+        }
 
         return { error };
     },
