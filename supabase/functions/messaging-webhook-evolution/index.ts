@@ -4,10 +4,15 @@
  * Recebe eventos da Evolution API (mensagens, status, etc.) e processa:
  * - Mensagens recebidas → cria/atualiza conversa + insere mensagem
  * - Status updates → atualiza status da mensagem
+ * - Connection updates → atualiza status do canal
+ *
+ * Rota:
+ * - `POST /functions/v1/messaging-webhook-evolution/<channel_id>`
  *
  * Autenticação:
  * - Header `x-api-key` ou `apikey` verificado contra `EVOLUTION_WEBHOOK_SECRET`
- * - Se `EVOLUTION_WEBHOOK_SECRET` não configurado, aceita qualquer request
+ *   (global) ou, se ausente, contra o `apiKey` nos credentials do canal.
+ * - Nunca aceita sem auth (default-deny).
  *
  * Deploy:
  * - Esta função deve ser deployada com `--no-verify-jwt` pois recebe
@@ -40,6 +45,7 @@ interface EvolutionMessageContent {
 interface EvolutionMessageData {
   key: EvolutionMessageKey;
   pushName?: string;
+  senderPn?: string;
   message?: EvolutionMessageContent;
   messageType?: string;
   messageTimestamp?: number;
@@ -62,11 +68,17 @@ interface EvolutionUpdatePayload {
   data: EvolutionUpdateData[];
 }
 
-type EvolutionPayload = EvolutionUpsertPayload | EvolutionUpdatePayload | {
-  event: string;
+interface EvolutionConnectionUpdatePayload {
+  event: "connection.update";
   instance: string;
-  data: unknown;
-};
+  data: { state?: string };
+}
+
+type EvolutionPayload =
+  | EvolutionUpsertPayload
+  | EvolutionUpdatePayload
+  | EvolutionConnectionUpdatePayload
+  | { event: string; instance: string; data: unknown };
 
 // =============================================================================
 // HELPERS
@@ -99,19 +111,23 @@ function getApiKeyFromRequest(req: Request): string {
 /**
  * Normalize remoteJid to a clean phone number.
  * Handles @s.whatsapp.net and @lid suffixes.
+ * Falls back to senderPn when @lid is detected (Evolution bug).
  */
-function normalizeRemoteJid(remoteJid: string): string | null {
+function normalizeRemoteJid(remoteJid: string, senderPn?: string): string | null {
   if (!remoteJid) return null;
-  // Extract the part before @
+  // @lid bug: Evolution às vezes retorna lid em vez do número real
+  if (remoteJid.includes("@lid") && senderPn) {
+    const digits = senderPn.replace(/\D/g, "");
+    return digits ? `+${digits}` : null;
+  }
   const phone = remoteJid.split("@")[0];
-  if (!phone) return null;
-  // Remove non-digits
   const digits = phone.replace(/\D/g, "");
   return digits ? `+${digits}` : null;
 }
 
 /**
- * Extract text content from Evolution API message by messageType.
+ * Extract text preview from Evolution API message by messageType.
+ * Used only for last_message_preview (string field).
  */
 function extractMessageText(data: EvolutionMessageData): string {
   const { messageType, message } = data;
@@ -123,13 +139,13 @@ function extractMessageText(data: EvolutionMessageData): string {
     case "extendedTextMessage":
       return message.extendedTextMessage?.text || "[mensagem]";
     case "imageMessage":
-      return message.imageMessage?.caption || "[imagem]";
+      return (message.imageMessage as Record<string, unknown>)?.caption as string || "[imagem]";
     case "audioMessage":
       return "[áudio]";
     case "videoMessage":
-      return message.videoMessage?.caption || "[vídeo]";
+      return (message.videoMessage as Record<string, unknown>)?.caption as string || "[vídeo]";
     case "documentMessage":
-      return message.documentMessage?.fileName || "[documento]";
+      return (message.documentMessage as Record<string, unknown>)?.fileName as string || "[documento]";
     case "stickerMessage":
       return "[sticker]";
     case "locationMessage": {
@@ -139,6 +155,49 @@ function extractMessageText(data: EvolutionMessageData): string {
     }
     default:
       return "[mensagem]";
+  }
+}
+
+/**
+ * Extract structured content from Evolution API message by messageType.
+ * Returns { contentType, content } to preserve the real media type.
+ */
+function extractMessageContent(data: EvolutionMessageData): { contentType: string; content: Record<string, unknown> } {
+  const { messageType, message } = data;
+  if (!message) return { contentType: "text", content: { type: "text", text: "[mensagem]" } };
+
+  switch (messageType) {
+    case "conversation":
+      return { contentType: "text", content: { type: "text", text: message.conversation || "[mensagem]" } };
+    case "extendedTextMessage":
+      return { contentType: "text", content: { type: "text", text: message.extendedTextMessage?.text || "[mensagem]" } };
+    case "imageMessage":
+      return {
+        contentType: "image",
+        content: { type: "image", mediaUrl: "", caption: (message.imageMessage as Record<string, unknown>)?.caption as string },
+      };
+    case "audioMessage":
+      return { contentType: "audio", content: { type: "audio", mediaUrl: "" } };
+    case "videoMessage":
+      return {
+        contentType: "video",
+        content: { type: "video", mediaUrl: "", caption: (message.videoMessage as Record<string, unknown>)?.caption as string },
+      };
+    case "documentMessage": {
+      const doc = message.documentMessage as Record<string, unknown>;
+      return { contentType: "document", content: { type: "document", mediaUrl: "", fileName: doc?.fileName as string } };
+    }
+    case "stickerMessage":
+      return { contentType: "sticker", content: { type: "sticker", mediaUrl: "" } };
+    case "locationMessage": {
+      const loc = message.locationMessage as Record<string, unknown>;
+      return {
+        contentType: "location",
+        content: { type: "location", latitude: loc?.degreesLatitude ?? 0, longitude: loc?.degreesLongitude ?? 0 },
+      };
+    }
+    default:
+      return { contentType: "text", content: { type: "text", text: `[${messageType || "mensagem"}]` } };
   }
 }
 
@@ -169,7 +228,7 @@ async function triggerAIProcessing(params: {
   const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
 
   if (!internalSecret) {
-    console.log("[Evolution] INTERNAL_API_SECRET not set, skipping AI processing");
+    console.warn("[Evolution] INTERNAL_API_SECRET not set, skipping AI processing");
     return;
   }
 
@@ -217,16 +276,11 @@ Deno.serve(async (req) => {
     return json(405, { error: "Método não permitido" });
   }
 
-  // Auth: check x-api-key / apikey against EVOLUTION_WEBHOOK_SECRET
-  const webhookSecret = Deno.env.get("EVOLUTION_WEBHOOK_SECRET");
-  if (webhookSecret) {
-    const providedKey = getApiKeyFromRequest(req);
-    if (!providedKey) {
-      return json(401, { error: "API key ausente" });
-    }
-    if (providedKey !== webhookSecret) {
-      return json(401, { error: "API key inválida" });
-    }
+  // Extract channelId from URL path (multi-tenant auth pattern)
+  const url = new URL(req.url);
+  const channelId = url.pathname.split("/").pop();
+  if (!channelId) {
+    return json(400, { error: "channel_id ausente na URL" });
   }
 
   // Parse payload
@@ -235,11 +289,6 @@ Deno.serve(async (req) => {
     payload = (await req.json()) as EvolutionPayload;
   } catch {
     return json(400, { error: "JSON inválido" });
-  }
-
-  const instanceName = payload.instance;
-  if (!instanceName) {
-    return json(200, { ok: false, error: "instance ausente no payload" });
   }
 
   // Setup Supabase client
@@ -256,12 +305,11 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // Fetch channel by provider + external_identifier (instanceName)
+  // Fetch channel by ID (not by instance name — avoids attacker-controlled lookup)
   const { data: channel, error: channelErr } = await supabase
     .from("messaging_channels")
-    .select("id, organization_id, business_unit_id, external_identifier, status")
-    .eq("provider", "evolution")
-    .eq("external_identifier", instanceName)
+    .select("id, organization_id, business_unit_id, external_identifier, status, credentials")
+    .eq("id", channelId)
     .in("status", ["connected", "active"])
     .maybeSingle();
 
@@ -271,17 +319,33 @@ Deno.serve(async (req) => {
   }
 
   if (!channel) {
-    console.warn(`[Evolution] No active channel found for instance: ${instanceName}`);
     return json(200, { ok: false, error: "Canal não encontrado" });
   }
+
+  // Auth default-deny: try global EVOLUTION_WEBHOOK_SECRET first,
+  // then fall back to apiKey stored in channel credentials.
+  // Never accept without auth.
+  const webhookSecret =
+    Deno.env.get("EVOLUTION_WEBHOOK_SECRET") ??
+    (channel.credentials as Record<string, string>)?.apiKey;
+  const providedKey = getApiKeyFromRequest(req);
+
+  if (!webhookSecret || !providedKey || providedKey !== webhookSecret) {
+    return json(401, { error: "API key inválida" });
+  }
+
+  // Log instance name from payload (truncated to prevent log injection)
+  const instanceName = (payload as { instance?: string }).instance ?? "";
 
   try {
     if (payload.event === "messages.upsert") {
       await handleMessagesUpsert(supabase, channel, payload as EvolutionUpsertPayload);
     } else if (payload.event === "messages.update") {
       await handleMessagesUpdate(supabase, payload as EvolutionUpdatePayload);
+    } else if (payload.event === "connection.update") {
+      await handleConnectionUpdate(supabase, channel, payload as EvolutionConnectionUpdatePayload);
     } else {
-      console.log(`[Evolution] Unhandled event: ${payload.event}`);
+      console.log(`[Evolution] Unhandled event: ${payload.event} instance: ${instanceName.slice(0, 64)}`);
     }
 
     return json(200, { ok: true, event: payload.event });
@@ -321,14 +385,16 @@ async function handleMessagesUpsert(
   const isFromMe = data.key.fromMe === true;
   const direction = isFromMe ? "outbound" : "inbound";
 
-  const phone = normalizeRemoteJid(remoteJid);
+  // Pass senderPn for @lid fallback (Evolution bug workaround)
+  const phone = normalizeRemoteJid(remoteJid, data.senderPn);
   if (!phone) {
     console.warn(`[Evolution] Could not normalize remoteJid: ${remoteJid}`);
     return;
   }
 
   const externalMessageId = data.key.id;
-  const messageText = extractMessageText(data);
+  const { contentType, content } = extractMessageContent(data);
+  const messageText = extractMessageText(data); // for last_message_preview only
   const pushName = data.pushName;
   const timestamp = data.messageTimestamp
     ? new Date(data.messageTimestamp * 1000)
@@ -352,7 +418,7 @@ async function handleMessagesUpsert(
     contactId = existingConv.contact_id;
   } else {
     // Find or create contact
-    const { data: existingContact } = await supabase
+    const { data: existingContact, error: contactLookupErr } = await supabase
       .from("contacts")
       .select("id")
       .eq("organization_id", channel.organization_id)
@@ -361,6 +427,11 @@ async function handleMessagesUpsert(
       .order("created_at")
       .limit(1)
       .maybeSingle();
+
+    if (contactLookupErr) {
+      console.error("[Evolution] Error looking up existing contact:", contactLookupErr);
+      throw contactLookupErr;
+    }
 
     if (existingContact) {
       contactId = existingContact.id;
@@ -428,17 +499,18 @@ async function handleMessagesUpsert(
   }
 
   // Insert message (inbound or outbound from WhatsApp app)
+  // Preserve real content type instead of always saving as 'text'
   const { error: msgErr } = await supabase.from("messaging_messages").insert({
     conversation_id: conversationId,
     external_id: externalMessageId,
     direction,
-    content_type: "text",
-    content: { type: "text", text: messageText },
+    content_type: contentType,
+    content,
     status: direction === "outbound" ? "sent" : "delivered",
     ...(direction === "outbound"
       ? { sent_at: timestamp.toISOString() }
       : { delivered_at: timestamp.toISOString() }),
-    sender_name: isFromMe ? "Você" : pushName,
+    sender_name: isFromMe ? null : pushName,
     metadata: {
       evolution_message_id: externalMessageId,
       message_type: data.messageType,
@@ -454,33 +526,41 @@ async function handleMessagesUpsert(
     return;
   }
 
-  // Update conversation
-  await supabase
+  // Update conversation — only reopen (status: open) for inbound messages
+  const { error: convUpdateErr } = await supabase
     .from("messaging_conversations")
     .update({
       last_message_at: timestamp.toISOString(),
       last_message_preview: messageText.slice(0, 100),
-      status: "open",
+      last_message_direction: direction,
+      ...(isFromMe ? {} : { status: "open" }),
     })
     .eq("id", conversationId);
 
-  // Only trigger AI for inbound messages
-  if (!isFromMe) {
-    const { data: insertedMsg } = await supabase
-      .from("messaging_messages")
-      .select("id")
-      .eq("external_id", externalMessageId)
-      .eq("conversation_id", conversationId)
-      .maybeSingle();
+  if (convUpdateErr) {
+    console.error("[Evolution] Failed to update conversation:", convUpdateErr, { conversationId });
+  }
 
-    triggerAIProcessing({
-      conversationId,
-      organizationId: channel.organization_id,
-      messageText,
-      messageId: insertedMsg?.id ?? externalMessageId,
-    }).catch((err) => {
-      console.error("[Evolution] AI processing trigger error:", err);
-    });
+  // Only trigger AI for inbound text messages
+  if (!isFromMe && contentType === "text") {
+    const textContent = content.text as string | undefined;
+    if (textContent) {
+      const { data: insertedMsg } = await supabase
+        .from("messaging_messages")
+        .select("id")
+        .eq("external_id", externalMessageId)
+        .eq("conversation_id", conversationId)
+        .maybeSingle();
+
+      triggerAIProcessing({
+        conversationId,
+        organizationId: channel.organization_id,
+        messageText: textContent,
+        messageId: insertedMsg?.id ?? externalMessageId,
+      }).catch((err) => {
+        console.error("[Evolution] AI processing trigger error:", err);
+      });
+    }
   }
 }
 
@@ -519,6 +599,35 @@ async function handleMessagesUpdate(
     } else {
       console.log(`[Evolution] Status updated: ${externalId} → ${newStatus}`);
     }
+  }
+}
+
+async function handleConnectionUpdate(
+  supabase: ReturnType<typeof createClient>,
+  channel: { id: string },
+  payload: EvolutionConnectionUpdatePayload
+) {
+  const stateMap: Record<string, string> = {
+    open: "connected",
+    close: "disconnected",
+    connecting: "connecting",
+  };
+
+  const state = payload.data?.state;
+  if (!state) return;
+
+  const newStatus = stateMap[state];
+  if (!newStatus) return;
+
+  const { error } = await supabase
+    .from("messaging_channels")
+    .update({ status: newStatus })
+    .eq("id", channel.id);
+
+  if (error) {
+    console.error("[Evolution] Failed to update channel status:", error, { state, channelId: channel.id });
+  } else {
+    console.log(`[Evolution] Channel ${channel.id} status → ${newStatus}`);
   }
 }
 
@@ -602,14 +711,21 @@ async function autoCreateDeal(
 
     console.log(`[Evolution] Auto-created deal: ${newDeal.id} for contact ${params.contactId}`);
 
-    // Update conversation metadata with deal reference
-    const { data: conv } = await supabase
+    // Update conversation metadata with deal reference — abort on read error
+    // to avoid wiping existing JSONB data with a bad merge.
+    const { data: conv, error: convMetaErr } = await supabase
       .from("messaging_conversations")
       .select("metadata")
       .eq("id", params.conversationId)
       .maybeSingle();
 
-    await supabase
+    if (convMetaErr) {
+      console.error("[Evolution] Failed to read conversation metadata:", convMetaErr);
+      // Do not proceed with update to avoid losing existing metadata
+      return;
+    }
+
+    const { error: metaUpdateErr } = await supabase
       .from("messaging_conversations")
       .update({
         metadata: {
@@ -619,6 +735,10 @@ async function autoCreateDeal(
         },
       })
       .eq("id", params.conversationId);
+
+    if (metaUpdateErr) {
+      console.error("[Evolution] Failed to update conversation metadata:", metaUpdateErr);
+    }
   } catch (error) {
     console.error("[Evolution] Unexpected error in autoCreateDeal:", error);
   }
