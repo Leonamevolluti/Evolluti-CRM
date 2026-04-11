@@ -717,4 +717,3 @@ function StageConfigRow({
     </div>
   );
 }
-
