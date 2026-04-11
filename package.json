@@ -92,5 +92,4 @@
     "node": ">=22"
   }
 },
-  "packageManager": "pnpm@9.15.0"
 }
